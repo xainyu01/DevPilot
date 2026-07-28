@@ -1,137 +1,17 @@
 {
-  "overall_percent": 80,
-  "current_batch": "B5",
-  "next_action": "开始阶段 6：实现 Tauri 桌面端与跨平台集成",
-  "updated_at": "2026-07-28T20:30:00+08:00",
-  "constraints": [
-    "所有新产生的文档放在 docs/ 目录",
-    "Python 依赖只使用 uv 管理，并提交 uv.lock",
-    "按计划书分批实施，每批都必须可暂停、可验证、可交接",
-    "不默认执行高风险外部操作"
-  ],
+  "overall_percent": 100,
+  "current_batch": "B6",
+  "next_action": "进入 B7-B8 团队与发布阶段；Linux/macOS 兼容适配保留为后续 TODO",
+  "updated_at": "2026-07-28T23:50:00+08:00",
+  "constraints": ["普通文档放在 docs/", "Python 依赖只由 uv 管理并提交 uv.lock", "按计划书分批实施，每批可暂停、可验证、可交接", "不默认执行高风险外部操作"],
   "batches": [
-    {
-      "id": "B0",
-      "title": "阶段 0：基础骨架与交接机制",
-      "status": "已完成（本批次）",
-      "percent": 100,
-      "scope": ["Monorepo", "FastAPI", "CLI", "契约", "交接 Agent"],
-      "completed": [
-        "建立 apps、packages、tests、docs 分层",
-        "建立 FastAPI 健康检查和元数据接口",
-        "建立 progress.json 结构化进度事实源",
-        "实现 handover Agent 和 CLI 命令",
-        "初始化 Git 仓库",
-        "补充初始化、下一步和 docs 管理指南"
-      ],
-      "in_progress": [],
-      "next_steps": [],
-      "blockers": []
-    },
-    {
-      "id": "B1",
-      "title": "阶段 1：模型与 LangGraph 内核",
-      "status": "已完成（本批次）",
-      "percent": 100,
-      "scope": ["LangGraph", "模型网关", "多模态", "暂停/恢复/取消"],
-      "completed": [
-        "锁定 LangGraph、LangChain OpenAI/Anthropic 依赖并同步 uv.lock",
-        "定义 AgentState、RunContext、RunEvent、Checkpoint 和多模态内容块契约",
-        "实现 load_context、normalize_input、plan、call_model、finalize 最小状态图",
-        "实现 FakeModel、OpenAI/Anthropic 适配器及明确未实现的 Ollama 适配器",
-        "实现能力检测、结构化能力错误、事件序列、暂停、恢复、取消与幂等运行",
-        "更新 API 阶段元数据并补充 B1 单元/契约测试"
-      ],
-      "in_progress": [],
-      "next_steps": [],
-      "blockers": []
-    },
-    {
-      "id": "B2",
-      "title": "阶段 2：工具、策略与人工审批",
-      "status": "已完成（本批次）",
-      "percent": 100,
-      "scope": ["工具注册", "PolicyEngine", "文件/搜索/补丁", "Shell/Git", "人工审批", "审计"],
-      "completed": [
-        "定义工具、风险、策略、审批、结果和审计契约",
-        "实现显式 ToolRegistry 与默认内置工具",
-        "实现工作区边界、能力检查、风险分级和超时/输出限制",
-        "实现文件读取、搜索、精确补丁和统一补丁",
-        "实现参数化白名单 Shell 与固定操作 Git 工具",
-        "实现本次/会话/命令范围的审批状态和脱敏审计日志",
-        "接入 LangGraph interrupt、审批恢复和 Agent 工具事件",
-        "增加 /api/v1/tools 工具目录"
-      ],
-      "in_progress": [],
-      "next_steps": [],
-      "blockers": []
-    },
-    {
-      "id": "B3",
-      "title": "阶段 3：数据、记忆与项目上下文",
-      "status": "已完成（本批次）",
-      "percent": 100,
-      "scope": ["SQLAlchemy/Alembic", "会话记忆", "摘要", "项目规则", "长期记忆"],
-      "completed": [
-        "建立 SQLAlchemy 2 数据模型、SQLite 默认连接和 Alembic 可回滚初始迁移",
-        "实现项目、会话、消息、内容块、摘要、记忆、规则、运行事件和 checkpoint 仓储",
-        "实现会话消息重启恢复、确定性摘要和独立的事件/checkpoint 持久化",
-        "发现并合并用户 MEMORY.md、AGENTS.md、CLAUDE.md 和 .codeassist/*.md，记录来源/作用域/优先级",
-        "实现长期记忆 Markdown 的新增、编辑、启用/禁用、删除和数据库修订索引",
-        "默认阻止 API key、token、password 和 secret 形态写入长期记忆",
-        "增加项目、会话、消息、规则发现和长期记忆 API"
-      ],
-      "in_progress": [],
-      "next_steps": [],
-      "blockers": []
-    },
-    {
-      "id": "B4",
-      "title": "阶段 4：研发工作流",
-      "status": "已完成（本批次）",
-      "percent": 100,
-      "scope": ["仓库解析", "增量索引", "证据链", "Agent 执行树", "测试调度", "Worktree", "PR 文档"],
-      "completed": [
-        "实现语言、框架、包管理器、命令、规则、符号和 Git 元数据扫描",
-        "实现基于文件哈希和 stat 元数据的增量索引并保存 RepositoryProfile",
-        "定义 IssueContext、EvidenceItem、BugHypothesis 和 WorkflowRun 结构化契约",
-        "实现 Issue/日志/失败测试的证据收集和带置信度 Bug 假设",
-        "实现 Supervisor、按需子 Agent、Assignment 权限交集、深度/并发/数量/预算限制和资源回收",
-        "实现确定性 ModelRouter、测试计划/并行/超时/重试/产物和 Worktree 租约",
-        "实现 PR Markdown 生成、导出和人工审核状态 API",
-        "新增 repository_profiles、workflow_runs 持久化和 B4 Alembic 迁移"
-      ],
-      "in_progress": [],
-      "next_steps": [],
-      "blockers": []
-    },
-    {
-      "id": "B5",
-      "title": "阶段 5：CLI 与 Web 工作台",
-      "status": "已完成（本批次）",
-      "percent": 100,
-      "scope": ["CLI", "React Web", "会话事件", "附件", "研发工作流视图"],
-      "completed": [
-        "通过 ADR-0002 确认 Python uv 与 apps/web pnpm 的独立锁定边界",
-        "实现项目、会话、聊天和工作流 CLI 命令",
-        "实现会话运行 REST、WebSocket 顺序事件和受限附件 API",
-        "实现 React/Vite 工作台，展示项目、会话、实时事件和研发工作流证据",
-        "增加 B5 客户端 API 契约测试并完成前端生产构建"
-      ],
-      "in_progress": [],
-      "next_steps": ["B6 实现 Tauri 桌面端与跨平台集成"],
-      "blockers": []
-    },
-    {
-      "id": "B6-B8",
-      "title": "阶段 6～8：桌面端、团队与发布",
-      "status": "未开始",
-      "percent": 0,
-      "scope": ["Tauri", "团队共享", "稳定化发布"],
-      "completed": [],
-      "in_progress": [],
-      "next_steps": ["完成 B6 桌面端与跨平台集成"],
-      "blockers": []
-    }
+    {"id":"B0","title":"阶段 0：基础骨架与交接机制","status":"已完成（本批次）","percent":100,"scope":["Monorepo","FastAPI","CLI","契约","交接 Agent"],"completed":["建立基础分层、FastAPI、进度事实源和交接 Agent"],"in_progress":[],"next_steps":[],"blockers":[]},
+    {"id":"B1","title":"阶段 1：模型与 LangGraph 内核","status":"已完成（本批次）","percent":100,"scope":["LangGraph","模型网关","运行生命周期"],"completed":["实现状态图、模型适配器、事件序列和 checkpoint"],"in_progress":[],"next_steps":[],"blockers":[]},
+    {"id":"B2","title":"阶段 2：工具、策略与人工审批","status":"已完成（本批次）","percent":100,"scope":["工具","策略","Shell/Git","审批","审计"],"completed":["实现工具注册、风险策略、文件/Shell/Git、审批和审计"],"in_progress":[],"next_steps":[],"blockers":[]},
+    {"id":"B3","title":"阶段 3：数据、记忆与项目上下文","status":"已完成（本批次）","percent":100,"scope":["数据库","会话记忆","项目规则","长期记忆"],"completed":["实现 SQLite/Alembic、会话、项目、规则和长期记忆 API"],"in_progress":[],"next_steps":[],"blockers":[]},
+    {"id":"B4","title":"阶段 4：研发工作流","status":"已完成（本批次）","percent":100,"scope":["仓库分析","证据链","Agent 执行树","测试","Worktree","PR"],"completed":["实现仓库扫描、证据链、Agent 调度、测试和 PR 文档"],"in_progress":[],"next_steps":[],"blockers":[]},
+    {"id":"B5","title":"阶段 5：CLI 与 Web 工作台","status":"已完成（本批次）","percent":100,"scope":["CLI","React Web","会话事件","研发视图"],"completed":["实现 CLI、React/Vite 工作台、WebSocket 事件流和生产构建"],"in_progress":[],"next_steps":[],"blockers":[]},
+    {"id":"B6","title":"阶段 6：Windows 本地 Web 与跨平台接口","status":"已完成（本批次）","percent":100,"scope":["FastAPI","Vite","Windows 本地 Web","平台端口","浏览器启动"],"completed":["修订计划书为 Windows-first 并保存原计划快照","FastAPI 托管 Vite dist、静态资源和 SPA 回退","CLI serve 支持浏览器启动、端口预检和明确启动错误","项目登记执行路径规范化、存在性与目录校验","提供 runtime logs API 并记录服务、项目和会话事件","Web 工作台支持登记项目、创建会话和 WebSocket 首次对话","新增平台端口接口：PathResolver、ProcessRunner、ShellRunner、BrowserLauncher、PlatformAdapter","Linux/macOS 兼容策略、能力声明和 TODO 清单写入架构文档","删除未完成的 Tauri、Rust、Sidecar 和桌面打包依赖","Windows 本地服务冒烟、完整测试 43 passed、Ruff、Vite build 和 doctor 通过"],"in_progress":[],"next_steps":["进入 B7-B8 团队与发布阶段","后续独立实现 Linux/macOS 适配器并运行平台冒烟"],"blockers":[]},
+    {"id":"B7-B8","title":"阶段 7-8：团队与发布","status":"未开始","percent":0,"scope":["团队共享","稳定化发布"],"completed":[],"in_progress":[],"next_steps":["完成团队共享、RBAC、远程 Host 和发布验收"],"blockers":[]}
   ]
 }

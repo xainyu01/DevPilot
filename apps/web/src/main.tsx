@@ -22,6 +22,9 @@ function App() {
   const [selectedSession, setSelectedSession] = useState<string>();
   const [snapshot, setSnapshot] = useState<Snapshot>();
   const [message, setMessage] = useState("");
+  const [projectName, setProjectName] = useState("");
+  const [projectPath, setProjectPath] = useState("");
+  const [sessionTitle, setSessionTitle] = useState("");
   const [eventLog, setEventLog] = useState<string[]>([]);
   const [error, setError] = useState<string>();
 
@@ -38,6 +41,34 @@ function App() {
   };
   useEffect(() => { void refresh(); }, []);
   useEffect(() => { if (selectedSession) void api<Snapshot>(`/api/v1/sessions/${selectedSession}`).then(setSnapshot).catch((cause: Error) => setError(cause.message)); }, [selectedSession]);
+
+  const registerProject = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!projectName.trim() || !projectPath.trim()) return;
+    try {
+      await api<Project>("/api/v1/projects", {
+        method: "POST",
+        body: JSON.stringify({ name: projectName.trim(), root_path: projectPath.trim() }),
+      });
+      setProjectName(""); setProjectPath(""); await refresh();
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "项目登记失败"); }
+  };
+
+  const createSession = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!sessionTitle.trim()) return;
+    try {
+      const created = await api<Session>("/api/v1/sessions", {
+        method: "POST",
+        body: JSON.stringify({
+          thread_id: crypto.randomUUID(),
+          title: sessionTitle.trim(),
+          project_id: projects[0]?.id,
+        }),
+      });
+      setSessionTitle(""); setSessions((current) => [created, ...current]); setSelectedSession(created.id);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "会话创建失败"); }
+  };
 
   const send = async (event: FormEvent) => {
     event.preventDefault();
@@ -61,7 +92,21 @@ function App() {
     <header><div><strong>CodeAssist</strong><span>研发工作台</span></div><button onClick={() => void refresh()}>刷新</button></header>
     {error && <p className="error">{error}</p>}
     <section className="layout">
-      <aside><h2>项目</h2>{projects.map((item) => <div className="item" key={item.id}><b>{item.name}</b><small>{item.root_path}</small></div>)}<h2>会话</h2>{sessions.map((item) => <button className={item.id === selectedSession ? "selected" : "item"} key={item.id} onClick={() => setSelectedSession(item.id)}>{item.title || item.thread_id}</button>)}</aside>
+      <aside>
+        <h2>项目</h2>
+        <form className="compact-form" onSubmit={registerProject}>
+          <input aria-label="项目名称" value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="项目名称" />
+          <input aria-label="项目路径" value={projectPath} onChange={(event) => setProjectPath(event.target.value)} placeholder="绝对路径或工作区相对路径" />
+          <button type="submit">登记项目</button>
+        </form>
+        {projects.map((item) => <div className="item" key={item.id}><b>{item.name}</b><small>{item.root_path}</small></div>)}
+        <h2>会话</h2>
+        <form className="compact-form" onSubmit={createSession}>
+          <input aria-label="会话标题" value={sessionTitle} onChange={(event) => setSessionTitle(event.target.value)} placeholder="新会话标题" />
+          <button type="submit">新建会话</button>
+        </form>
+        {sessions.map((item) => <button className={item.id === selectedSession ? "selected" : "item"} key={item.id} onClick={() => setSelectedSession(item.id)}>{item.title || item.thread_id}</button>)}
+      </aside>
       <section className="conversation"><h1>{activeSession?.title || "选择一个会话"}</h1><div className="messages">{snapshot?.messages.map((item) => <article className={item.message.role} key={item.id}><label>{item.message.role}</label>{item.message.content.map((block, index) => <p key={index}>{block.text || block.content || `[${block.type}]`}</p>)}</article>)}</div><form onSubmit={send}><textarea aria-label="消息" value={message} onChange={(event) => setMessage(event.target.value)} placeholder="向 Agent 描述任务…" /><button type="submit" disabled={!activeSession}>发送</button></form>{eventLog.length > 0 && <details open><summary>实时事件</summary><pre>{eventLog.join("\n")}</pre></details>}</section>
       <aside className="workflow"><h2>研发工作流</h2>{workflows.map((item) => <article className="item" key={item.id}><b>{item.issue.description}</b><small>{item.status} · {item.evidence.length} 项证据</small><ol>{item.events.map((event) => <li key={event.sequence}>{event.type}</li>)}</ol>{item.pr_document && <small>PR: {item.pr_document.title} ({item.pr_document.review_status})</small>}</article>)}<h2>可用模型</h2><p className="item">本地演示：fake / fake-model<br />配置凭据后可通过 API 使用 OpenAI 或 Anthropic。</p></aside>
     </section>

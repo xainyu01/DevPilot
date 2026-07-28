@@ -1,6 +1,7 @@
 """CodeAssist CLI for local development and handover operations."""
 
 import json
+import socket
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -27,8 +28,48 @@ console = Console()
 def serve(
     host: str = typer.Option("127.0.0.1", help="Bind address."),
     port: int = typer.Option(8000, min=1, max=65535, help="Bind port."),
+    open_browser: bool = typer.Option(
+        True,
+        "--open-browser/--no-open-browser",
+        help="Open the local Web workbench after startup.",
+    ),
 ) -> None:
-    """Start the FastAPI service."""
+    """Start FastAPI and optionally open the Vite Web workbench."""
+    try:
+        _assert_port_available(host, port)
+    except OSError as exc:
+        console.print(f"[red]Cannot start local Web service on {host}:{port}: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    browser_url = f"http://{'127.0.0.1' if host in {'0.0.0.0', '::'} else host}:{port}"
+    console.print(f"Web workbench: {browser_url}")
+    browser_timer = None
+    if open_browser:
+        import webbrowser
+        from threading import Timer
+
+        browser_timer = Timer(0.8, webbrowser.open, args=(browser_url,))
+        browser_timer.daemon = True
+        browser_timer.start()
+
+    try:
+        _run_uvicorn(host, port)
+    except OSError as exc:
+        if browser_timer is not None:
+            browser_timer.cancel()
+        console.print(f"[red]Local Web service failed to start on {host}:{port}: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+
+def _assert_port_available(host: str, port: int) -> None:
+    """Fail early with a clear message instead of hiding a bind error in Uvicorn logs."""
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    with socket.socket(family, socket.SOCK_STREAM) as probe:
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        probe.bind((host, port))
+
+
+def _run_uvicorn(host: str, port: int) -> None:
     import uvicorn
 
     uvicorn.run("apps.api.main:app", host=host, port=port, reload=False)

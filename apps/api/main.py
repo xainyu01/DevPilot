@@ -2,11 +2,14 @@
 
 import base64
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Query, Response, WebSocket, WebSocketDisconnect, status
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.responses import FileResponse
+from starlette.staticfiles import StaticFiles
 
 from packages.agent_core import AgentRuntime
 from packages.contracts import (
@@ -116,6 +119,7 @@ def create_app(
     *,
     database_url: str | None = None,
     workspace_root: Path | None = None,
+    web_dist_path: Path | None = None,
 ) -> FastAPI:
     workspace = (workspace_root or project_root()).expanduser().resolve()
     configured_url = database_url or os.environ.get("CODEASSIST_DATABASE_URL")
@@ -128,6 +132,16 @@ def create_app(
     app.state.database = database
     app.state.workspace_root = workspace
     app.state.agent_runtime = AgentRuntime(ModelGateway([FakeModel()]))
+    app.state.runtime_logs: list[dict[str, object]] = []
+    _record_runtime_log(
+        app,
+        event="service.initialized",
+        message="FastAPI service initialized",
+        data={
+            "workspace_root": str(workspace),
+            "web_dist": str(web_dist_path or workspace / "apps" / "web" / "dist"),
+        },
+    )
 
     @app.get("/healthz", tags=["system"])
     def healthz() -> dict[str, str]:
@@ -138,7 +152,7 @@ def create_app(
         return {
             "name": "codeassist-next",
             "version": "0.1.0",
-            "stage": 5,
+            "stage": 6,
             "dependency_manager": "uv",
             "features": {
                 "agent_core": "available",
@@ -147,8 +161,8 @@ def create_app(
                 "openai_adapter": "available_with_credentials",
                 "anthropic_adapter": "available_with_credentials",
                 "ollama_adapter": "declared_not_implemented",
-            "handover_agent": "available",
-            "tool_runtime": "available",
+                "handover_agent": "available",
+                "tool_runtime": "available",
             "policy_engine": "available",
                 "approvals": "available_in_memory",
                 "persistence": "available",
@@ -160,9 +174,17 @@ def create_app(
                 "test_orchestrator": "available",
                 "pr_documents": "available_with_review_gate",
                 "frontend": "available",
-                "tauri": "planned",
+                "web_hosting": "available_when_built",
+                "desktop_shell": "deferred_optional",
+                "project_registration": "available_with_path_validation",
+                "runtime_logs": "available",
             },
         }
+
+    @app.get("/api/v1/runtime/logs", tags=["system"])
+    def runtime_logs(limit: int = Query(default=100, ge=1, le=200)) -> list[dict[str, object]]:
+        """Return recent local service events for the Web diagnostics panel."""
+        return list(app.state.runtime_logs[-limit:])
 
     @app.get("/api/v1/progress", tags=["project"])
     def progress() -> dict[str, object]:
@@ -181,7 +203,17 @@ def create_app(
     def create_project(payload: ProjectCreateRequest) -> dict[str, object]:
         db = _database(app)
         repository = ProjectRepository(db)
-        project = repository.get_or_create(name=payload.name, root_path=payload.root_path)
+        try:
+            root_path = _normalize_project_root(payload.root_path, base_dir=workspace)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        project = repository.get_or_create(name=payload.name, root_path=str(root_path))
+        _record_runtime_log(
+            app,
+            event="project.registered",
+            message="Project directory registered",
+            data={"project_id": project.id, "root_path": project.root_path},
+        )
         return project.model_dump(mode="json")
 
     @app.get("/api/v1/projects", tags=["project"])
@@ -272,6 +304,12 @@ def create_app(
             SessionRepository(_database(app)).append_message(
                 session_id, ChatMessage.from_text("assistant", result.final_text)
             )
+        _record_runtime_log(
+            app,
+            event="session.run.completed",
+            message="Session run completed",
+            data={"session_id": session_id, "run_id": request.run_id, "status": str(result.status)},
+        )
         return result.model_dump(mode="json")
 
     @app.websocket("/api/v1/sessions/{session_id}/events")
@@ -301,6 +339,16 @@ def create_app(
                 if final_text:
                     SessionRepository(_database(app)).append_message(
                         session_id, ChatMessage.from_text("assistant", str(final_text))
+                    )
+                    _record_runtime_log(
+                        app,
+                        event="session.run.completed",
+                        message="WebSocket session run completed",
+                        data={
+                            "session_id": session_id,
+                            "run_id": request.run_id,
+                            "transport": "websocket",
+                        },
                     )
         except WebSocketDisconnect:
             return
@@ -504,12 +552,66 @@ def create_app(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
+    web_dist = (web_dist_path or project_root() / "apps" / "web" / "dist").resolve()
+    assets_dir = web_dist / "assets"
+    if assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="web-assets")
+
+    if (web_dist / "index.html").is_file():
+
+        @app.get("/", include_in_schema=False)
+        def web_index() -> FileResponse:
+            return FileResponse(web_dist / "index.html")
+
+        @app.get("/{web_path:path}", include_in_schema=False)
+        def web_fallback(web_path: str) -> FileResponse:
+            if web_path.startswith("api/"):
+                raise HTTPException(status_code=404, detail="API route not found")
+            target = (web_dist / web_path).resolve()
+            if target.is_relative_to(web_dist.resolve()) and target.is_file():
+                return FileResponse(target)
+            return FileResponse(web_dist / "index.html")
+
     return app
 
 
 def project_root() -> Path:
     """Resolve the repository root without coupling the domain package to FastAPI."""
     return Path(__file__).resolve().parents[2]
+
+
+def _normalize_project_root(raw_path: str, *, base_dir: Path) -> Path:
+    """Resolve an explicitly registered project and require an existing directory."""
+    candidate = Path(raw_path).expanduser()
+    if not candidate.is_absolute():
+        candidate = base_dir / candidate
+    try:
+        resolved = candidate.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise ValueError(f"project root is not accessible: {raw_path}") from exc
+    if not resolved.is_dir():
+        raise ValueError(f"project root must be an existing directory: {resolved}")
+    return resolved
+
+
+def _record_runtime_log(
+    app: FastAPI,
+    *,
+    event: str,
+    message: str,
+    data: dict[str, object] | None = None,
+) -> None:
+    logs: list[dict[str, object]] = app.state.runtime_logs
+    logs.append(
+        {
+            "timestamp": datetime.now(UTC).isoformat(),
+            "level": "info",
+            "event": event,
+            "message": message,
+            "data": data or {},
+        }
+    )
+    del logs[:-200]
 
 
 def _database(app: FastAPI) -> Database:
