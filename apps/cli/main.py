@@ -1,4 +1,4 @@
-"""CodeAssist CLI for local development and handover operations."""
+"""DevPilot CLI for local development and handover operations."""
 
 import json
 import os
@@ -14,7 +14,7 @@ from rich.table import Table
 from packages.handover_agent import HandoverAgent
 from packages.persistence import backup_sqlite_database, default_database_url
 
-app = typer.Typer(help="CodeAssist 2.0 command line interface.")
+app = typer.Typer(help="DevPilot command line interface.")
 auth_app = typer.Typer(help="Obtain a short-lived JWT for authenticated API commands.")
 database_app = typer.Typer(help="Create safe local database recovery snapshots.")
 handover_app = typer.Typer(help="Generate and inspect pause/resume handover documents.")
@@ -86,7 +86,7 @@ def progress() -> None:
     """Show the current implementation progress."""
     agent = HandoverAgent.from_workspace()
     snapshot = agent.progress
-    table = Table(title=f"CodeAssist progress: {snapshot.overall_percent}%")
+    table = Table(title=f"DevPilot progress: {snapshot.overall_percent}%")
     table.add_column("Batch")
     table.add_column("Status")
     table.add_column("Progress")
@@ -139,12 +139,12 @@ def backup_database(
     destination: Path = typer.Argument(..., help="New SQLite snapshot path; must not exist."),
     database_url: str | None = typer.Option(
         None,
-        help="Optional sqlite:/// URL; defaults to CODEASSIST_DATABASE_URL or the local database.",
+        help="Optional sqlite:/// URL; defaults to DEVPILOT_DATABASE_URL or the local database.",
     ),
 ) -> None:
     """Write a non-destructive consistent snapshot of a file-backed SQLite database."""
     root = Path(__file__).resolve().parents[2]
-    effective_url = database_url or os.environ.get("CODEASSIST_DATABASE_URL")
+    effective_url = database_url or os.environ.get("DEVPILOT_DATABASE_URL")
     try:
         target = backup_sqlite_database(
             effective_url or default_database_url(root), destination
@@ -163,7 +163,7 @@ def _api_request(
 ) -> object:
     body = json.dumps(payload).encode("utf-8") if payload is not None else None
     headers = {"Content-Type": "application/json"} if body is not None else {}
-    access_token = os.environ.get("CODEASSIST_ACCESS_TOKEN")
+    access_token = os.environ.get("DEVPILOT_ACCESS_TOKEN")
     if access_token:
         headers["Authorization"] = f"Bearer {access_token}"
     request = Request(
@@ -188,11 +188,11 @@ def _print_json(value: object) -> None:
 
 @auth_app.command("login")
 def login(
-    username: str = typer.Argument(..., help="One of the configured CodeAssist user IDs."),
+    username: str = typer.Argument(..., help="One of the configured DevPilot user IDs."),
     password: str = typer.Option(..., prompt=True, hide_input=True, help="Account password."),
     api_url: str = typer.Option("http://127.0.0.1:8000"),
 ) -> None:
-    """Print a signed JWT for use as ``CODEASSIST_ACCESS_TOKEN`` in this shell."""
+    """Print a signed JWT for use as ``DEVPILOT_ACCESS_TOKEN`` in this shell."""
     _print_json(
         _api_request(
             "POST",

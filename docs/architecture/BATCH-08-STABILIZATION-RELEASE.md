@@ -39,7 +39,7 @@
 uv --cache-dir .uv-cache sync --group dev
 uv --cache-dir .uv-cache run pytest
 uv --cache-dir .uv-cache run ruff check .
-uv --cache-dir .uv-cache run codeassist doctor
+uv --cache-dir .uv-cache run devpilot doctor
 pnpm --dir apps/web build
 docker compose config
 ```

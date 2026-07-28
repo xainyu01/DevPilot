@@ -16,6 +16,8 @@ apps/web/dist/
 *.tsbuildinfo
 
 # Local runtime data
+.devpilot/
+# Legacy local runtime data is intentionally ignored to prevent accidental publication.
 .codeassist/
 deploy/secrets/
 

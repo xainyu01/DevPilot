@@ -16,7 +16,7 @@ class WorktreeManager:
 
     def __init__(self, root: Path) -> None:
         self.root = root.expanduser().resolve()
-        self.lease_root = self.root / ".codeassist" / "worktrees"
+        self.lease_root = self.root / ".devpilot" / "worktrees"
 
     def acquire(self, workflow_id: str) -> WorktreeLease:
         safe_id = re.sub(r"[^A-Za-z0-9_.-]", "-", workflow_id)
@@ -116,7 +116,7 @@ class WorktreeManager:
                 ".uv-cache",
                 ".pytest_cache",
                 ".ruff_cache",
-                ".codeassist",
+                ".devpilot",
                 "__pycache__",
             ),
         )

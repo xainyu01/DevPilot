@@ -17,9 +17,9 @@ from .models import Base
 
 def default_database_url(workspace_root: Path) -> str:
     """Return the local-first SQLite URL used by the API when not configured."""
-    data_dir = workspace_root / ".codeassist"
+    data_dir = workspace_root / ".devpilot"
     data_dir.mkdir(parents=True, exist_ok=True)
-    return f"sqlite:///{(data_dir / 'codeassist.db').as_posix()}"
+    return f"sqlite:///{(data_dir / 'devpilot.db').as_posix()}"
 
 
 class Database:
@@ -31,7 +31,7 @@ class Database:
     """
 
     def __init__(self, url: str | None = None) -> None:
-        self.url = url or os.environ.get("CODEASSIST_DATABASE_URL", "sqlite:///:memory:")
+        self.url = url or os.environ.get("DEVPILOT_DATABASE_URL", "sqlite:///:memory:")
         connect_args = {"check_same_thread": False} if self.url.startswith("sqlite") else {}
         engine_kwargs: dict[str, object] = {
             "future": True,

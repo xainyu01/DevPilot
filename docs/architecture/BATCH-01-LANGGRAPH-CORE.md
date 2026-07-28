@@ -40,7 +40,7 @@ tests/
 3. 运行被标记为暂停后，不再执行后续节点；恢复时从保存的节点状态继续。
 4. 取消运行后输出明确的取消状态，不伪装成成功完成。
 5. 不支持的多模态能力在调用前返回结构化能力错误，不静默丢弃内容块。
-6. `uv run pytest`、`uv run ruff check .` 和 `uv run codeassist doctor` 通过。
+6. `uv run pytest`、`uv run ruff check .` 和 `uv run devpilot doctor` 通过。
 7. 更新 `docs/progress.json`、`docs/PROGRESS.md`，并生成 B1 交接文档。
 
 ## 完成后的下一步

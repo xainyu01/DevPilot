@@ -44,7 +44,7 @@ class RuleDiscovery:
 
         candidates: list[tuple[Path, int]] = []
         if include_user_memory:
-            candidates.append((self.user_home / ".codeassist" / "MEMORY.md", 0))
+            candidates.append((self.user_home / ".devpilot" / "MEMORY.md", 0))
 
         ancestors = list(reversed([current, *current.parents]))
         ancestors = [
@@ -56,9 +56,9 @@ class RuleDiscovery:
             priority = 10 + distance * 10
             for filename in ("AGENTS.md", "CLAUDE.md"):
                 candidates.append((directory / filename, priority))
-            codeassist_dir = directory / ".codeassist"
-            if codeassist_dir.is_dir():
-                for path in sorted(codeassist_dir.glob("*.md"), key=lambda item: item.name.lower()):
+            devpilot_dir = directory / ".devpilot"
+            if devpilot_dir.is_dir():
+                for path in sorted(devpilot_dir.glob("*.md"), key=lambda item: item.name.lower()):
                     candidates.append((path, priority + 5))
 
         rules: list[ProjectRule] = []
@@ -115,7 +115,7 @@ def _source_kind(path: Path) -> str:
     if filename == "PROJECT.MD":
         return "project"
     if filename == "MEMORY.MD":
-        return "user_memory" if path.parent.name == ".codeassist" else "memory"
+        return "user_memory" if path.parent.name == ".devpilot" else "memory"
     return "other"
 
 

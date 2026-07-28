@@ -2,11 +2,11 @@ services:
   database:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: ${CODEASSIST_POSTGRES_DB:-codeassist}
-      POSTGRES_USER: ${CODEASSIST_POSTGRES_USER:-codeassist}
+      POSTGRES_DB: ${DEVPILOT_POSTGRES_DB:-devpilot}
+      POSTGRES_USER: ${DEVPILOT_POSTGRES_USER:-devpilot}
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
     volumes:
-      - codeassist-postgres:/var/lib/postgresql/data
+      - devpilot-postgres:/var/lib/postgresql/data
     secrets:
       - postgres_password
     healthcheck:
@@ -18,25 +18,25 @@ services:
   app:
     build: .
     environment:
-      CODEASSIST_ENV: production
-      CODEASSIST_DATABASE_URL: postgresql+psycopg://codeassist@database:5432/codeassist
-      CODEASSIST_AUTH_SECRET_FILE: /run/secrets/codeassist_auth_secret
-      CODEASSIST_POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      DEVPILOT_ENV: production
+      DEVPILOT_DATABASE_URL: postgresql+psycopg://devpilot@database:5432/devpilot
+      DEVPILOT_AUTH_SECRET_FILE: /run/secrets/devpilot_auth_secret
+      DEVPILOT_POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
       database:
         condition: service_healthy
     secrets:
-      - codeassist_auth_secret
+      - devpilot_auth_secret
       - postgres_password
     restart: unless-stopped
 
 secrets:
-  codeassist_auth_secret:
-    file: ./deploy/secrets/codeassist_auth_secret
+  devpilot_auth_secret:
+    file: ./deploy/secrets/devpilot_auth_secret
   postgres_password:
     file: ./deploy/secrets/postgres_password
 
 volumes:
-  codeassist-postgres:
+  devpilot-postgres:

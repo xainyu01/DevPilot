@@ -1,4 +1,4 @@
-"""Safe, policy-gated tools for the CodeAssist domain layer."""
+"""Safe, policy-gated tools for the DevPilot domain layer."""
 
 from .approvals import ApprovalStore
 from .audit import AuditLog

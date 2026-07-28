@@ -1,6 +1,6 @@
 # 初始化与首次运行
 
-本文是 CodeAssist 2.0 当前工作区的首次启动手册。当前已完成 B0 基础骨架，下一步是 B1 LangGraph 内核。
+本文是 DevPilot 当前工作区的首次启动手册。当前已完成 B0 基础骨架，下一步是 B1 LangGraph 内核。
 
 ## 1. 环境要求
 
@@ -23,7 +23,7 @@ Git 仓库已经初始化，但尚未替用户创建首个提交。确认文件�
 ```powershell
 git status --short
 git add .
-git commit -m "Initialize CodeAssist 2.0 scaffold"
+git commit -m "Initialize DevPilot scaffold"
 ```
 
 如果希望先审阅变更，只执行 `git status --short` 和 `git diff --cached`，不要直接提交。
@@ -48,7 +48,7 @@ uv --cache-dir .uv-cache sync --group dev
 ```powershell
 uv --cache-dir .uv-cache run pytest
 uv --cache-dir .uv-cache run ruff check .
-uv --cache-dir .uv-cache run codeassist doctor
+uv --cache-dir .uv-cache run devpilot doctor
 ```
 
 预期结果：测试通过、Ruff 无错误、doctor 的四项检查全部为 PASS。
@@ -56,7 +56,7 @@ uv --cache-dir .uv-cache run codeassist doctor
 ## 4. 启动 API
 
 ```powershell
-uv --cache-dir .uv-cache run codeassist serve
+uv --cache-dir .uv-cache run devpilot serve
 ```
 
 另开一个终端验证：
@@ -72,9 +72,9 @@ API 文档地址：`http://127.0.0.1:8000/docs`。
 ## 5. 查看进度与生成交接
 
 ```powershell
-uv --cache-dir .uv-cache run codeassist progress
-uv --cache-dir .uv-cache run codeassist handover preview --reason requested
-uv --cache-dir .uv-cache run codeassist handover write --reason paused
+uv --cache-dir .uv-cache run devpilot progress
+uv --cache-dir .uv-cache run devpilot handover preview --reason requested
+uv --cache-dir .uv-cache run devpilot handover write --reason paused
 ```
 
 交接文档会生成在 `docs/handovers/`，并包含当前批次、完成项、进行中事项、阻塞项、恢复检查清单和工作区快照。

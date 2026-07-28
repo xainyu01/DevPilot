@@ -57,7 +57,7 @@ class AuthSettings:
         """Return B7's fixed release-candidate identities for local development."""
         return cls(
             environment="development",
-            token_secret=b"codeassist-development-only-signing-secret-not-for-production",
+            token_secret=b"devpilot-development-only-signing-secret-not-for-production",
             users=_fixed_b7_users(),
         )
 
@@ -65,32 +65,32 @@ class AuthSettings:
     def from_environment(cls, environ: Mapping[str, str] | None = None) -> AuthSettings:
         """Load a deployment signing secret or fixed release-candidate defaults.
 
-        ``CODEASSIST_ENV=production`` requires a signing secret. The B7 account/
+        ``DEVPILOT_ENV=production`` requires a signing secret. The B7 account/
         password set is intentionally retained until the public-launch credential
         replacement; only the signing secret is deployment-specific. ``*_FILE``
         supports Docker/Kubernetes secret mounts without copying a key into the image.
         """
         values = os.environ if environ is None else environ
-        environment = values.get("CODEASSIST_ENV", "development").strip().lower()
+        environment = values.get("DEVPILOT_ENV", "development").strip().lower()
         if environment == "development":
             return cls.development()
         if environment != "production":
             raise AuthenticationConfigurationError(
-                "CODEASSIST_ENV must be either development or production"
+                "DEVPILOT_ENV must be either development or production"
             )
 
-        secret = _read_secret_value("CODEASSIST_AUTH_SECRET", values)
+        secret = _read_secret_value("DEVPILOT_AUTH_SECRET", values)
         if len(secret.encode("utf-8")) < 32:
             raise AuthenticationConfigurationError(
-                "CODEASSIST_AUTH_SECRET must contain at least 32 bytes"
+                "DEVPILOT_AUTH_SECRET must contain at least 32 bytes"
             )
         return cls(
             environment="production",
             token_secret=secret.encode("utf-8"),
             users=_fixed_b7_users(),
-            token_ttl_seconds=_read_duration(values, "CODEASSIST_AUTH_TOKEN_TTL_SECONDS", 3_600),
+            token_ttl_seconds=_read_duration(values, "DEVPILOT_AUTH_TOKEN_TTL_SECONDS", 3_600),
             host_token_ttl_seconds=_read_duration(
-                values, "CODEASSIST_HOST_TOKEN_TTL_SECONDS", 2_592_000
+                values, "DEVPILOT_HOST_TOKEN_TTL_SECONDS", 2_592_000
             ),
             max_attachment_bytes=_read_attachment_limit(values),
         )
@@ -270,18 +270,18 @@ def _read_duration(values: Mapping[str, str], name: str, default: int) -> int:
 
 
 def _read_attachment_limit(values: Mapping[str, str]) -> int:
-    raw = values.get("CODEASSIST_MAX_ATTACHMENT_BYTES")
+    raw = values.get("DEVPILOT_MAX_ATTACHMENT_BYTES")
     if raw is None:
         return 10 * 1024 * 1024
     try:
         value = int(raw)
     except ValueError as exc:
         raise AuthenticationConfigurationError(
-            "CODEASSIST_MAX_ATTACHMENT_BYTES must be an integer"
+            "DEVPILOT_MAX_ATTACHMENT_BYTES must be an integer"
         ) from exc
     if not 1_024 <= value <= 100 * 1024 * 1024:
         raise AuthenticationConfigurationError(
-            "CODEASSIST_MAX_ATTACHMENT_BYTES must be between 1024 and 104857600"
+            "DEVPILOT_MAX_ATTACHMENT_BYTES must be between 1024 and 104857600"
         )
     return value
 

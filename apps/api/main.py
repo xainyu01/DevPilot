@@ -198,12 +198,12 @@ def create_app(
     auth_settings: AuthSettings | None = None,
 ) -> FastAPI:
     workspace = (workspace_root or project_root()).expanduser().resolve()
-    configured_url = database_url or os.environ.get("CODEASSIST_DATABASE_URL")
+    configured_url = database_url or os.environ.get("DEVPILOT_DATABASE_URL")
     database = Database(configured_url or default_database_url(workspace))
     resolved_auth_settings = auth_settings or AuthSettings.from_environment()
     authentication = AuthenticationService(resolved_auth_settings)
     app = FastAPI(
-        title="CodeAssist 2.0 API",
+        title="DevPilot API",
         version="0.1.0rc1",
         description="Local-first Agent service boundary for the LangGraph core.",
     )
@@ -265,7 +265,7 @@ def create_app(
 
     @app.get("/healthz", tags=["system"])
     def healthz() -> dict[str, str]:
-        return {"status": "ok", "service": "codeassist-api"}
+        return {"status": "ok", "service": "devpilot-api"}
 
     @app.get("/readyz", tags=["system"])
     def readyz() -> dict[str, str]:
@@ -275,12 +275,12 @@ def create_app(
                 connection.execute(text("SELECT 1"))
         except SQLAlchemyError as exc:
             raise HTTPException(status_code=503, detail="database is unavailable") from exc
-        return {"status": "ready", "service": "codeassist-api"}
+        return {"status": "ready", "service": "devpilot-api"}
 
     @app.get("/api/v1/meta", tags=["system"])
     def meta() -> dict[str, object]:
         return {
-            "name": "codeassist-next",
+            "name": "devpilot",
             "version": "0.1.0rc1",
             "stage": 8,
             "dependency_manager": "uv",
@@ -570,9 +570,9 @@ def create_app(
     @app.post("/api/v1/remote-hosts/{host_id}/heartbeat", tags=["remote-host"])
     def remote_host_heartbeat(
         host_id: str,
-        x_codeassist_host_token: str | None = Header(default=None),
+        x_devpilot_host_token: str | None = Header(default=None),
     ) -> dict[str, str]:
-        if not authentication.authenticate_host_token(x_codeassist_host_token, host_id):
+        if not authentication.authenticate_host_token(x_devpilot_host_token, host_id):
             raise HTTPException(status_code=401, detail="invalid host token")
         return {"status": "accepted", "host_id": host_id}
 
@@ -620,7 +620,7 @@ def create_app(
         if len(content) > resolved_auth_settings.max_attachment_bytes:
             raise HTTPException(status_code=413, detail="attachment exceeds configured size limit")
         attachment_id = str(uuid4())
-        directory = workspace / ".codeassist" / "attachments" / session_id
+        directory = workspace / ".devpilot" / "attachments" / session_id
         directory.mkdir(parents=True, exist_ok=True)
         target = directory / attachment_id
         target.write_bytes(content)
@@ -1094,9 +1094,9 @@ def _memory_store(app: FastAPI, scope: MemoryScope, owner_id: str) -> LongTermMe
         project = ProjectRepository(database).get(owner_id)
         if project is None:
             raise HTTPException(status_code=404, detail=f"project not found: {owner_id}")
-        path = Path(project.root_path) / ".codeassist" / "MEMORY.md"
+        path = Path(project.root_path) / ".devpilot" / "MEMORY.md"
     else:
-        path = app.state.workspace_root / ".codeassist" / "users" / owner_id / "MEMORY.md"
+        path = app.state.workspace_root / ".devpilot" / "users" / owner_id / "MEMORY.md"
     return LongTermMemoryStore(
         path,
         owner_id=owner_id,

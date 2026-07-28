@@ -17,7 +17,7 @@ from packages.contracts import (
     MemoryWriteStatus,
 )
 
-_MARKER = re.compile(r"^<!-- codeassist-memory (\{.*\}) -->$")
+_MARKER = re.compile(r"^<!-- devpilot-memory (\{.*\}) -->$")
 _SENSITIVE_PATTERNS = (
     re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
     re.compile(r"\b(?:ghp|github_pat|xox[baprs])_[A-Za-z0-9_-]{12,}\b", re.I),
@@ -195,7 +195,7 @@ class LongTermMemoryStore:
 
     def _write_entries(self, entries: list[MemoryEntry]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        sections = ["# CodeAssist Long-Term Memory", ""]
+        sections = ["# DevPilot Long-Term Memory", ""]
         for entry in entries:
             metadata = {
                 "id": entry.id,
@@ -210,7 +210,7 @@ class LongTermMemoryStore:
             }
             sections.extend(
                 [
-                    "<!-- codeassist-memory "
+                    "<!-- devpilot-memory "
                     f"{json.dumps(metadata, ensure_ascii=False, sort_keys=True)} -->",
                     f"## {entry.key}",
                     entry.content.rstrip(),

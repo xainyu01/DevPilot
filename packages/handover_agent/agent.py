@@ -66,7 +66,7 @@ class HandoverAgent:
         state = self.collect_workspace_state()
         generated_at = datetime.now().astimezone().isoformat(timespec="seconds")
         lines = [
-            "# CodeAssist 2.0 交接文档",
+            "# DevPilot 交接文档",
             "",
             f"> 生成原因：{reason}",
             f"> 生成时间：{generated_at}",
@@ -127,7 +127,7 @@ class HandoverAgent:
                 "## 生成方式",
                 "",
                 "```powershell",
-                "uv run codeassist handover write --reason paused",
+                "uv run devpilot handover write --reason paused",
                 "```",
                 "",
             ]

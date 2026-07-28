@@ -132,7 +132,7 @@ class TestOrchestrator:
     ) -> None:
         self.root = root.expanduser().resolve()
         self.executor = executor or SubprocessTestExecutor()
-        self.artifact_dir = (artifact_dir or self.root / ".codeassist" / "artifacts").resolve()
+        self.artifact_dir = (artifact_dir or self.root / ".devpilot" / "artifacts").resolve()
         self._cancelled = threading.Event()
 
     def cancel(self) -> None:

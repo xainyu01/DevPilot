@@ -15,7 +15,7 @@ def authenticate(client: TestClient) -> None:
 
 
 def test_b3_api_persists_session_and_discovers_rules_after_app_restart(tmp_path: Path) -> None:
-    database_path = tmp_path / "codeassist.db"
+    database_path = tmp_path / "devpilot.db"
     database_url = f"sqlite:///{database_path.as_posix()}"
     project_root = tmp_path / "project"
     project_root.mkdir()

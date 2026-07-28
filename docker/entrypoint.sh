@@ -3,10 +3,10 @@ set -eu
 
 # psycopg/libpq accepts a protected password file, keeping the database URL and
 # process arguments free of the database password.
-if [ -n "${CODEASSIST_POSTGRES_PASSWORD_FILE:-}" ]; then
+if [ -n "${DEVPILOT_POSTGRES_PASSWORD_FILE:-}" ]; then
     umask 077
-    PGPASSFILE="/tmp/codeassist.pgpass"
-    printf 'database:5432:codeassist:codeassist:%s\n' "$(cat "$CODEASSIST_POSTGRES_PASSWORD_FILE")" > "$PGPASSFILE"
+    PGPASSFILE="/tmp/devpilot.pgpass"
+    printf 'database:5432:devpilot:devpilot:%s\n' "$(cat "$DEVPILOT_POSTGRES_PASSWORD_FILE")" > "$PGPASSFILE"
     export PGPASSFILE
 fi
 

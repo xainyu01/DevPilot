@@ -162,7 +162,7 @@ wheels = [
 ]
 
 [[package]]
-name = "codeassist-next"
+name = "devpilot"
 version = "0.1.0rc1"
 source = { editable = "." }
 dependencies = [

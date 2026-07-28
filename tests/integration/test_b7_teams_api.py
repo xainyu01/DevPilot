@@ -77,7 +77,7 @@ def test_b7_team_rbac_session_share_and_remote_host_declaration(tmp_path: Path) 
         assert paired.json()["status"] == "paired"
         heartbeat = client.post(
             f"/api/v1/remote-hosts/{host.json()['id']}/heartbeat",
-            headers={"X-CodeAssist-Host-Token": paired.json()["host_token"]},
+            headers={"X-DevPilot-Host-Token": paired.json()["host_token"]},
         )
         assert heartbeat.json()["status"] == "accepted"
 

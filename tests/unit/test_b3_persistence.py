@@ -88,7 +88,7 @@ def test_long_term_memory_is_editable_and_blocks_credential_shaped_candidates(
     assert blocked.status.value == "blocked_sensitive"
     assert store.list_entries() == []
     assert repository.list(owner_id="local-user") == []
-    assert "CodeAssist Long-Term Memory" in (tmp_path / "MEMORY.md").read_text(encoding="utf-8")
+    assert "DevPilot Long-Term Memory" in (tmp_path / "MEMORY.md").read_text(encoding="utf-8")
 
 
 def test_rule_discovery_records_scope_precedence_and_database_index(tmp_path: Path) -> None:
@@ -97,12 +97,12 @@ def test_rule_discovery_records_scope_precedence_and_database_index(tmp_path: Pa
     child.mkdir(parents=True)
     (root / "AGENTS.md").write_text("root rules", encoding="utf-8")
     (root / "CLAUDE.md").write_text("compat rules", encoding="utf-8")
-    (root / ".codeassist").mkdir()
-    (root / ".codeassist" / "PROJECT.md").write_text("project facts", encoding="utf-8")
+    (root / ".devpilot").mkdir()
+    (root / ".devpilot" / "PROJECT.md").write_text("project facts", encoding="utf-8")
     (child / "AGENTS.md").write_text("feature rules", encoding="utf-8")
     user_home = tmp_path / "user"
-    (user_home / ".codeassist").mkdir(parents=True)
-    (user_home / ".codeassist" / "MEMORY.md").write_text("user preference", encoding="utf-8")
+    (user_home / ".devpilot").mkdir(parents=True)
+    (user_home / ".devpilot" / "MEMORY.md").write_text("user preference", encoding="utf-8")
 
     database = Database("sqlite://")
     database.create_all()

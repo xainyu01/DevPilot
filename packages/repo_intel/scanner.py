@@ -26,7 +26,7 @@ _IGNORED_DIRS = {
     ".ruff_cache",
     ".mypy_cache",
     ".uv-cache",
-    ".codeassist",
+    ".devpilot",
     "dist",
     "build",
     "target",
@@ -167,7 +167,7 @@ class RepositoryScanner:
 
 
 def load_index(root: Path) -> RepositoryProfile | None:
-    path = root.expanduser().resolve() / ".codeassist" / "repository-index.json"
+    path = root.expanduser().resolve() / ".devpilot" / "repository-index.json"
     if not path.is_file():
         return None
     try:
@@ -177,7 +177,7 @@ def load_index(root: Path) -> RepositoryProfile | None:
 
 
 def _save_index(root: Path, profile: RepositoryProfile) -> None:
-    index_path = root / ".codeassist" / "repository-index.json"
+    index_path = root / ".devpilot" / "repository-index.json"
     index_path.parent.mkdir(parents=True, exist_ok=True)
     index_path.write_text(
         json.dumps(profile.model_dump(mode="json"), ensure_ascii=False, indent=2),

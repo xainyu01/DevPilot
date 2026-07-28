@@ -24,9 +24,9 @@
 uv --cache-dir .uv-cache sync --group dev
 uv --cache-dir .uv-cache run pytest
 uv --cache-dir .uv-cache run ruff check .
-uv --cache-dir .uv-cache run codeassist serve
-uv --cache-dir .uv-cache run codeassist progress
-uv --cache-dir .uv-cache run codeassist handover write --reason paused
+uv --cache-dir .uv-cache run devpilot serve
+uv --cache-dir .uv-cache run devpilot progress
+uv --cache-dir .uv-cache run devpilot handover write --reason paused
 ```
 
 按照当前仓库的依赖策略，不要使用 `pip install`、`requirements.txt`、npm 或 pnpm。

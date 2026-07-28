@@ -1,1 +1,1 @@
-"""Application entry points for CodeAssist 2.0."""
+"""Application entry points for DevPilot."""

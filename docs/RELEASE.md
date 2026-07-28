@@ -9,7 +9,7 @@
 ## 首次容器部署
 
 1. 创建仅本机可读、未纳入 Git 的 `deploy/secrets/` 目录。
-2. 写入至少 32 字节的 `codeassist_auth_secret` 和强随机 `postgres_password`。两个文件都不应包含示例值、账号密码或换行外的额外内容。
+2. 写入至少 32 字节的 `devpilot_auth_secret` 和强随机 `postgres_password`。两个文件都不应包含示例值、账号密码或换行外的额外内容。
 3. 运行 `docker compose config` 检查 Compose 展开结果，再运行 `docker compose up --build -d`。
 4. 在宿主机执行 `curl http://127.0.0.1:8000/healthz` 和 `curl http://127.0.0.1:8000/readyz`；两者分别应返回 `ok` 和 `ready`。
 
@@ -20,19 +20,19 @@
 Web 登录与 CLI 登录使用同一 API。CLI 会打印短期 JWT，操作员在当前 PowerShell 会话中设置它：
 
 ```powershell
-$login = uv --cache-dir .uv-cache run codeassist auth login <user-id> | ConvertFrom-Json
-$env:CODEASSIST_ACCESS_TOKEN = $login.access_token
-uv --cache-dir .uv-cache run codeassist project list
+$login = uv --cache-dir .uv-cache run devpilot auth login <user-id> | ConvertFrom-Json
+$env:DEVPILOT_ACCESS_TOKEN = $login.access_token
+uv --cache-dir .uv-cache run devpilot project list
 ```
 
-不要把 JWT 写入仓库、脚本、Shell 历史、文档或截图。JWT 到期后重新登录；更换 `CODEASSIST_AUTH_SECRET` 会使此前签发的 JWT 立即失效。
+不要把 JWT 写入仓库、脚本、Shell 历史、文档或截图。JWT 到期后重新登录；更换 `DEVPILOT_AUTH_SECRET` 会使此前签发的 JWT 立即失效。
 
 ## 备份、升级与回滚
 
 SQLite 本地部署在升级前创建一致性快照，目标文件必须是新路径：
 
 ```powershell
-uv --cache-dir .uv-cache run codeassist database backup .\backups\codeassist-before-b8.db
+uv --cache-dir .uv-cache run devpilot database backup .\backups\devpilot-before-b8.db
 ```
 
 PostgreSQL 部署使用数据库管理员工具创建一致性备份，例如由受管服务快照或 `pg_dump`；应用不会代替数据库服务保存密码、备份或执行破坏性恢复。

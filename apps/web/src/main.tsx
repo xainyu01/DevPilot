@@ -11,7 +11,7 @@ type Workflow = { id: string; status: string; issue: { description: string }; ev
 type LoginResponse = { access_token: string; user_id: string };
 
 const api = async <T,>(path: string, init?: RequestInit, token?: string): Promise<T> => {
-  const bearer = token || localStorage.getItem("codeassist_access_token") || "";
+  const bearer = token || localStorage.getItem("devpilot_access_token") || "";
   const response = await fetch(path, { ...init, headers: { "Content-Type": "application/json", ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}), ...init?.headers } });
   if (!response.ok) throw new Error((await response.json().catch(() => ({ detail: response.statusText }))).detail);
   return response.json() as Promise<T>;
@@ -29,7 +29,7 @@ function App() {
   const [sessionTitle, setSessionTitle] = useState("");
   const [eventLog, setEventLog] = useState<string[]>([]);
   const [error, setError] = useState<string>();
-  const [token, setToken] = useState(() => localStorage.getItem("codeassist_access_token") || "");
+  const [token, setToken] = useState(() => localStorage.getItem("devpilot_access_token") || "");
   const [username, setUsername] = useState("admin");
   const [password, setPassword] = useState("admin");
 
@@ -63,7 +63,7 @@ function App() {
     event.preventDefault();
     try {
       const result = await api<LoginResponse>("/api/v1/auth/login", { method: "POST", body: JSON.stringify({ username, password }) });
-      localStorage.setItem("codeassist_access_token", result.access_token);
+      localStorage.setItem("devpilot_access_token", result.access_token);
       setToken(result.access_token); setPassword(""); setError(undefined);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "登录失败"); }
   };
@@ -103,10 +103,10 @@ function App() {
     } catch (cause) { setError(cause instanceof Error ? cause.message : "发送失败"); }
   };
 
-  if (!token) return <main className="login-page"><section className="login-card"><h1>CodeAssist</h1><p>使用已授权账号登录。</p><form className="compact-form" onSubmit={login}><input aria-label="账号" value={username} onChange={(event) => setUsername(event.target.value)} /><input aria-label="密码" type="password" value={password} onChange={(event) => setPassword(event.target.value)} /><button type="submit">登录</button></form>{error && <p className="error">{error}</p>}</section></main>;
+  if (!token) return <main className="login-page"><section className="login-card"><h1>DevPilot</h1><p>使用已授权账号登录。</p><form className="compact-form" onSubmit={login}><input aria-label="账号" value={username} onChange={(event) => setUsername(event.target.value)} /><input aria-label="密码" type="password" value={password} onChange={(event) => setPassword(event.target.value)} /><button type="submit">登录</button></form>{error && <p className="error">{error}</p>}</section></main>;
 
   return <main>
-    <header><div><strong>CodeAssist</strong><span>研发工作台</span></div><button onClick={() => void refresh()}>刷新</button></header>
+    <header><div><strong>DevPilot</strong><span>研发工作台</span></div><button onClick={() => void refresh()}>刷新</button></header>
     {error && <p className="error">{error}</p>}
     <section className="layout">
       <aside>

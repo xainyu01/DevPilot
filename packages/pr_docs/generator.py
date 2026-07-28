@@ -77,9 +77,9 @@ class PRDocumentGenerator:
         return document.model_copy(update={"body": f"# {title}\n\n{summary}\n\n{body}"})
 
     def export(self, document: PRDocument, *, filename: str | None = None) -> PRDocument:
-        target = self.root / ".codeassist" / "artifacts" / (filename or f"pr-{document.id}.md")
+        target = self.root / ".devpilot" / "artifacts" / (filename or f"pr-{document.id}.md")
         target = target.resolve()
-        target.relative_to((self.root / ".codeassist" / "artifacts").resolve())
+        target.relative_to((self.root / ".devpilot" / "artifacts").resolve())
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(document.body, encoding="utf-8")
         return document.model_copy(update={"markdown_path": str(target)})

@@ -21,11 +21,11 @@ COPY migrations migrations
 COPY packages packages
 COPY --from=web-build /build/apps/web/dist apps/web/dist
 RUN uv sync --frozen --no-dev && \
-    useradd --create-home --uid 10001 codeassist && \
-    chown -R codeassist:codeassist /app
+    useradd --create-home --uid 10001 devpilot && \
+    chown -R devpilot:devpilot /app
 COPY docker/entrypoint.sh docker/entrypoint.sh
 RUN chmod 0555 docker/entrypoint.sh
-USER codeassist
+USER devpilot
 EXPOSE 8000
 ENTRYPOINT ["./docker/entrypoint.sh"]
 CMD ["uv", "run", "uvicorn", "apps.api.main:app", "--host", "0.0.0.0", "--port", "8000"]

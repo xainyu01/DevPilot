@@ -1,4 +1,4 @@
-# CodeAssist 2.0 交接文档
+# DevPilot 交接文档
 
 > 生成原因：batch-completed
 > 生成时间：2026-07-28T23:55:30+08:00
@@ -66,7 +66,7 @@
 
 ## 工作区快照
 
-- 顶层条目：.agents, .codeassist, .git, .github, .gitignore, .idea, .pnpm-store, .pytest_cache, .python-version, .ruff_cache, .uv-cache, AGENTS.md, alembic.ini, apps, docs, migrations, node_modules, packages, pnpm-lock.yaml, pnpm-workspace.yaml, pyproject.toml, tests, uv.lock, 项目重写计划书.md
+- 顶层条目：.agents, .devpilot, .git, .github, .gitignore, .idea, .pnpm-store, .pytest_cache, .python-version, .ruff_cache, .uv-cache, AGENTS.md, alembic.ini, apps, docs, migrations, node_modules, packages, pnpm-lock.yaml, pnpm-workspace.yaml, pyproject.toml, tests, uv.lock, 项目重写计划书.md
 - 交接文件默认位于 `docs/handovers/`。
 - 进度事实来源为 `docs/progress.json`，人类可读视图为 `docs/PROGRESS.md`。
 
@@ -81,5 +81,5 @@
 ## 生成方式
 
 ```powershell
-uv run codeassist handover write --reason paused
+uv run devpilot handover write --reason paused
 ```

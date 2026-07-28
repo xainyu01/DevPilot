@@ -4,7 +4,7 @@
 .ruff_cache
 .uv-cache
 .venv
-.codeassist
+.devpilot
 node_modules
 .pnpm-store
 apps/web/node_modules

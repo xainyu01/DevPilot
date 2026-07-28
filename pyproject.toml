@@ -1,5 +1,5 @@
 [project]
-name = "codeassist-next"
+name = "devpilot"
 version = "0.1.0rc1"
 description = "A local-first multi-agent development assistant."
 requires-python = ">=3.11"
@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [project.scripts]
-codeassist = "apps.cli.main:app"
+devpilot = "apps.cli.main:app"
 
 [dependency-groups]
 dev = [

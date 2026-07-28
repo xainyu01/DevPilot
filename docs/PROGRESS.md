@@ -1,4 +1,4 @@
-# CodeAssist 2.0 实施进度
+# DevPilot 实施进度
 
 > 最后更新：2026-07-29 03:30（Asia/Shanghai）
 > 当前批次：B8，95%（容器运行验收待执行）
@@ -24,7 +24,7 @@
 - 项目规则、仓库扫描、工作流、Agent 树、PR 文档和用户/项目记忆均增加资源级授权检查。
 - 远程 Host 配对码只保存摘要，十分钟后失效且成功配对后不可重放；迁移、SQLite 备份、readiness、附件限制、登录限流和浏览器安全响应头已经落地。
 - 已提交 Dockerfile、Docker Compose、发布候选版本 `0.1.0rc1` 及部署、升级和回滚指南。
-- 已通过 `53 passed`、`ruff check .`、`codeassist doctor`、Vite production build、数据库升级/降级回归和 `git diff --check`。
+- 已通过 `53 passed`、`ruff check .`、`devpilot doctor`、Vite production build、数据库升级/降级回归和 `git diff --check`。
 
 ## 待完成的发布验收
 

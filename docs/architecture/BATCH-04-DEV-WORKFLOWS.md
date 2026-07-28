@@ -6,11 +6,11 @@
 
 ## 设计边界
 
-- `packages/repo_intel` 只负责文件、生态、命令、规则、符号和 Git 元数据；索引缓存写入项目 `.codeassist/`，不把运行数据提交到仓库。
+- `packages/repo_intel` 只负责文件、生态、命令、规则、符号和 Git 元数据；索引缓存写入项目 `.devpilot/`，不把运行数据提交到仓库。
 - `packages/dev_workflows` 只依赖契约和领域服务，不依赖 FastAPI 或 SQLAlchemy；持久化通过 Protocol 注入。
 - Supervisor 与子 Agent 通过 `AgentAssignment` 传递权限，工具、能力、路径、模型和预算取父任务与角色策略的交集。
 - 子 Agent 默认深度为 1，服务端硬限制并发子 Agent、总子 Agent、Token 和墙钟时间；终态运行标记资源已回收。
-- 测试执行器只接受显式 argv，不调用 shell；测试输出和产物在 `.codeassist/artifacts/`，敏感形态脱敏。
+- 测试执行器只接受显式 argv，不调用 shell；测试输出和产物在 `.devpilot/artifacts/`，敏感形态脱敏。
 - Worktree 修改必须使用明确的文件、旧文本、新文本和人工批准；工作流本身只生成建议，不自动合并或推送。
 - PR 文档由结构化证据、变更文件和测试结果生成，并有独立人工审核状态。
 

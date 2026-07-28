@@ -16,7 +16,7 @@ def test_health_endpoint() -> None:
     response = TestClient(app).get("/healthz")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "service": "codeassist-api"}
+    assert response.json() == {"status": "ok", "service": "devpilot-api"}
 
 
 def test_meta_declares_uv_and_stage_eight() -> None:
@@ -41,7 +41,7 @@ def test_meta_declares_uv_and_stage_eight() -> None:
 def test_fastapi_hosts_vite_production_build(tmp_path: Path) -> None:
     web_dist = tmp_path / "web-dist"
     web_dist.mkdir()
-    (web_dist / "index.html").write_text("<title>CodeAssist Web</title>", encoding="utf-8")
+    (web_dist / "index.html").write_text("<title>DevPilot Web</title>", encoding="utf-8")
     web_app = create_app(
         database_url=f"sqlite:///{tmp_path / 'web.db'}",
         workspace_root=tmp_path,
@@ -51,7 +51,7 @@ def test_fastapi_hosts_vite_production_build(tmp_path: Path) -> None:
     response = TestClient(web_app).get("/")
 
     assert response.status_code == 200
-    assert "CodeAssist Web" in response.text
+    assert "DevPilot Web" in response.text
 
 
 def test_local_web_first_conversation_and_runtime_logs(tmp_path: Path) -> None:

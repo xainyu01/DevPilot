@@ -36,7 +36,7 @@ def backup_sqlite_database(database_url: str, destination: Path) -> Path:
 def _sqlite_path(database_url: str) -> Path:
     prefix = "sqlite:///"
     if not database_url.startswith(prefix):
-        raise ValueError("only file-backed sqlite:/// database URLs support CodeAssist backup")
+        raise ValueError("only file-backed sqlite:/// database URLs support DevPilot backup")
     raw_path = unquote(database_url.removeprefix(prefix))
     if raw_path in {":memory:", ""}:
         raise ValueError("an in-memory SQLite database cannot be backed up")

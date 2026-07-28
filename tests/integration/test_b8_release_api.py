@@ -84,7 +84,7 @@ def test_pairing_code_is_persistent_and_one_time_while_host_jwt_survives_restart
     with TestClient(second_restart) as client:
         heartbeat = client.post(
             f"/api/v1/remote-hosts/{host['id']}/heartbeat",
-            headers={"X-CodeAssist-Host-Token": host_token},
+            headers={"X-DevPilot-Host-Token": host_token},
         )
         assert heartbeat.status_code == 200
 

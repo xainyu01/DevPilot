@@ -9,7 +9,7 @@ from sqlalchemy import create_engine, inspect
 
 def test_b8_pairing_migration_upgrades_and_downgrades(tmp_path: Path, monkeypatch) -> None:
     database_url = f"sqlite:///{(tmp_path / 'migration.db').as_posix()}"
-    monkeypatch.setenv("CODEASSIST_DATABASE_URL", database_url)
+    monkeypatch.setenv("DEVPILOT_DATABASE_URL", database_url)
     config = Config("alembic.ini")
 
     command.upgrade(config, "head")

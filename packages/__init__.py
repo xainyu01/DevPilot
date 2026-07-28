@@ -1,1 +1,1 @@
-"""Domain packages for CodeAssist 2.0."""
+"""Domain packages for DevPilot."""

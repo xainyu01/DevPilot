@@ -10,8 +10,8 @@
 - `packages/persistence/repositories.py`：项目、会话、消息、摘要、规则、记忆、运行事件和 checkpoint 仓储。
 - `packages/memory/session.py`：会话消息追加、重启恢复和确定性摘要。
 - `packages/memory/long_term.py`：人类可读 `MEMORY.md`，支持新增、编辑、启用/禁用、删除和历史版本索引。
-- `packages/project_context/discovery.py`：发现用户记忆、`AGENTS.md`、`CLAUDE.md` 和 `.codeassist/*.md`，记录来源、作用域和优先级。
-- `migrations/`：Alembic 初始迁移；通过 `CODEASSIST_DATABASE_URL` 可切换 SQLite/PostgreSQL。
+- `packages/project_context/discovery.py`：发现用户记忆、`AGENTS.md`、`CLAUDE.md` 和 `.devpilot/*.md`，记录来源、作用域和优先级。
+- `migrations/`：Alembic 初始迁移；通过 `DEVPILOT_DATABASE_URL` 可切换 SQLite/PostgreSQL。
 
 ## 记忆安全边界
 
@@ -25,7 +25,7 @@ uv run pytest
 uv run ruff check .
 ```
 
-默认 API 数据库为工作区 `.codeassist/codeassist.db`。测试可以把 `create_app(database_url="sqlite://")` 传入内存数据库。`SessionMemoryService.restore()` 通过 `thread_id` 重新加载会话消息，数据库进程重启不会清空这些行。
+默认 API 数据库为工作区 `.devpilot/devpilot.db`。测试可以把 `create_app(database_url="sqlite://")` 传入内存数据库。`SessionMemoryService.restore()` 通过 `thread_id` 重新加载会话消息，数据库进程重启不会清空这些行。
 
 ## 非目标
 

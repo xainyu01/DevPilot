@@ -18,8 +18,8 @@
 1. `uv sync --group dev` 成功。
 2. `uv run pytest` 全部通过。
 3. `uv run ruff check .` 无错误。
-4. `uv run codeassist doctor` 通过。
-5. `uv run codeassist handover write --reason paused` 只在 `docs/handovers/` 生成文档。
+4. `uv run devpilot doctor` 通过。
+5. `uv run devpilot handover write --reason paused` 只在 `docs/handovers/` 生成文档。
 
 ## 后续批次
 

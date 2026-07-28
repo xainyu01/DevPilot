@@ -65,7 +65,7 @@
 暂停前执行：
 
 ```powershell
-uv --cache-dir .uv-cache run codeassist handover write --reason paused
+uv --cache-dir .uv-cache run devpilot handover write --reason paused
 ```
 
 恢复时按顺序执行：
