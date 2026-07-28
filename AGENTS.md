@@ -55,3 +55,10 @@ uv --cache-dir .uv-cache run codeassist handover write --reason paused
 ## Agent 专用工作流
 
 开始工作前先阅读项目计划书、`docs/PROGRESS.md` 和 `docs/handovers/` 中最新的交接文档。每次只处理一个明确批次；完成后更新 `docs/progress.json` 和 `docs/PROGRESS.md`，运行测试与 Ruff，并在暂停或移交工作前生成交接文档。
+## 未来计划与 TODO 标注规则
+
+- 仅实现当前批次和当前计划书验收范围；未来阶段暂不需要实现的能力必须保留接口或契约，并在代码、函数定义、类定义和接口定义附近添加中文 `TODO` 注释。
+- TODO 注释必须说明“暂不实现的原因、对应未来批次或计划章节、预期返回状态”，不得把未实现能力伪装成成功或静默降级。
+- 对未来平台适配，优先抽取端口/协议/适配器接口；Linux、macOS、桌面壳层、远程控制、真实供应商等未到当前批次的实现只保留接口、能力声明和 TODO，不得把平台分支散落到领域核心。
+- 新增 TODO 时同步更新 `docs/progress.json`、`docs/PROGRESS.md` 或相关架构文档；完成 TODO 前先补测试和验收标准。
+- 注释示例：`# TODO（后续 B7）：暂不实现 Linux 适配器，当前仅保留 PlatformAdapter 接口并返回 declared_not_implemented。`

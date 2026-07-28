@@ -331,6 +331,7 @@ class AnthropicAdapter(LangChainAdapter):
         return super()._content_for_block(block)
 
 
+# TODO（后续模型批次）：Ollama 仅保留配置与能力接口，当前批次不实现本地推理。
 class OllamaAdapter(ChatModelAdapter):
     """Capability/configuration placeholder; local inference is a later batch."""
 
@@ -339,11 +340,13 @@ class OllamaAdapter(ChatModelAdapter):
     def __init__(self, model: str = "llama3.2") -> None:
         self.model = model
 
+    # TODO（后续模型批次）：接入 Ollama 客户端后再实现调用；当前必须返回明确未实现错误。
     async def invoke(self, request: ChatRequest) -> ChatResponse:
         raise AdapterNotImplementedError(
             "Ollama adapter is declared but not implemented in this batch"
         )
 
+    # TODO（后续模型批次）：接入 Ollama 流式协议后再实现事件转换。
     async def stream(self, request: ChatRequest) -> AsyncIterator[ModelStreamEvent]:
         raise AdapterNotImplementedError(
             "Ollama adapter is declared but not implemented in this batch"
@@ -353,11 +356,13 @@ class OllamaAdapter(ChatModelAdapter):
     def capabilities(self) -> ModelCapabilities:
         return ModelCapabilities(text=True)
 
+    # TODO（后续模型批次）：接入 Ollama tokenizer 后再实现精确 token 统计。
     def count_tokens(self, messages: list[ChatMessage]) -> TokenUsage:
         raise AdapterNotImplementedError(
             "Ollama token counting is not implemented in this batch"
         )
 
+    # TODO（后续模型批次）：Ollama 服务可用性检查应在真实客户端接入后实现。
     def healthcheck(self) -> AdapterHealth:
         return AdapterHealth(
             provider=self.provider,
