@@ -3,131 +3,87 @@ import { createRoot } from "react-dom/client";
 import "./styles.css";
 
 type Project = { id: string; name: string; root_path: string };
-type Session = { id: string; thread_id: string; project_id?: string; title?: string };
-type Block = { type: string; text?: string; content?: string; filename?: string };
-type StoredMessage = { id: string; ordinal: number; message: { role: string; content: Block[] } };
-type Snapshot = { session: Session; messages: StoredMessage[] };
-type Workflow = { id: string; status: string; issue: { description: string }; evidence: unknown[]; events: { sequence: number; type: string }[]; pr_document?: { title: string; review_status: string } };
+type Session = { id: string; thread_id: string; title?: string };
+type Block = { type: string; text?: string; content?: string };
+type Snapshot = { messages: { id: string; message: { role: string; content: Block[] } }[] };
 type LoginResponse = { access_token: string; user_id: string };
+type RuntimeSettings = {
+  idle_shutdown_minutes: number; model_provider: string; model_name: string;
+  users: { id: string; display_name: string }[];
+};
 
-const api = async <T,>(path: string, init?: RequestInit, token?: string): Promise<T> => {
-  const bearer = token || localStorage.getItem("devpilot_access_token") || "";
-  const response = await fetch(path, { ...init, headers: { "Content-Type": "application/json", ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}), ...init?.headers } });
+const api = async <T,>(path: string, init?: RequestInit): Promise<T> => {
+  const token = localStorage.getItem("devpilot_access_token") || "";
+  const response = await fetch(path, { ...init, headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}), ...init?.headers } });
   if (!response.ok) throw new Error((await response.json().catch(() => ({ detail: response.statusText }))).detail);
   return response.json() as Promise<T>;
 };
 
 function App() {
+  const [token, setToken] = useState(() => localStorage.getItem("devpilot_access_token") || "");
+  const [currentUser, setCurrentUser] = useState(() => localStorage.getItem("devpilot_user_id") || "");
+  const [username, setUsername] = useState("admin");
+  const [password, setPassword] = useState("admin");
   const [projects, setProjects] = useState<Project[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
-  const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [selectedSession, setSelectedSession] = useState<string>();
   const [snapshot, setSnapshot] = useState<Snapshot>();
   const [message, setMessage] = useState("");
-  const [projectName, setProjectName] = useState("");
-  const [projectPath, setProjectPath] = useState("");
-  const [sessionTitle, setSessionTitle] = useState("");
-  const [eventLog, setEventLog] = useState<string[]>([]);
+  const [settings, setSettings] = useState<RuntimeSettings>();
+  const [idleMinutes, setIdleMinutes] = useState("5");
+  const [provider, setProvider] = useState("fake");
+  const [modelName, setModelName] = useState("fake-model");
+  const [newUserId, setNewUserId] = useState("");
+  const [newUserName, setNewUserName] = useState("");
+  const [newUserPassword, setNewUserPassword] = useState("");
   const [error, setError] = useState<string>();
-  const [token, setToken] = useState(() => localStorage.getItem("devpilot_access_token") || "");
-  const [username, setUsername] = useState("admin");
-  const [password, setPassword] = useState("admin");
-
   const activeSession = useMemo(() => sessions.find((item) => item.id === selectedSession), [sessions, selectedSession]);
+
   const refresh = async () => {
     try {
-      const [nextProjects, nextSessions, nextWorkflows] = await Promise.all([
-        api<Project[]>("/api/v1/projects"), api<Session[]>("/api/v1/sessions"), api<Workflow[]>("/api/v1/workflows"),
-      ]);
-      setProjects(nextProjects); setSessions(nextSessions); setWorkflows(nextWorkflows);
+      const [nextProjects, nextSessions] = await Promise.all([api<Project[]>("/api/v1/projects"), api<Session[]>("/api/v1/sessions")]);
+      setProjects(nextProjects); setSessions(nextSessions);
       if (!selectedSession && nextSessions[0]) setSelectedSession(nextSessions[0].id);
+      if (currentUser === "admin") {
+        const next = await api<RuntimeSettings>("/api/v1/settings");
+        setSettings(next); setIdleMinutes(String(next.idle_shutdown_minutes)); setProvider(next.model_provider); setModelName(next.model_name);
+      }
       setError(undefined);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "无法连接 API"); }
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to connect to API"); }
   };
-  useEffect(() => { if (token) void refresh(); }, [token]);
+  useEffect(() => { if (token) void refresh(); }, [token, currentUser]);
   useEffect(() => { if (selectedSession) void api<Snapshot>(`/api/v1/sessions/${selectedSession}`).then(setSnapshot).catch((cause: Error) => setError(cause.message)); }, [selectedSession]);
-
-  const registerProject = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!projectName.trim() || !projectPath.trim()) return;
-    try {
-      await api<Project>("/api/v1/projects", {
-        method: "POST",
-        body: JSON.stringify({ name: projectName.trim(), root_path: projectPath.trim() }),
-      });
-      setProjectName(""); setProjectPath(""); await refresh();
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "项目登记失败"); }
-  };
 
   const login = async (event: FormEvent) => {
     event.preventDefault();
     try {
       const result = await api<LoginResponse>("/api/v1/auth/login", { method: "POST", body: JSON.stringify({ username, password }) });
-      localStorage.setItem("devpilot_access_token", result.access_token);
-      setToken(result.access_token); setPassword(""); setError(undefined);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "登录失败"); }
+      localStorage.setItem("devpilot_access_token", result.access_token); localStorage.setItem("devpilot_user_id", result.user_id); setToken(result.access_token); setCurrentUser(result.user_id); setPassword("");
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Login failed"); }
   };
-
-  const createSession = async (event: FormEvent) => {
+  const createSession = async () => {
+    try { const session = await api<Session>("/api/v1/sessions", { method: "POST", body: JSON.stringify({ thread_id: crypto.randomUUID(), title: "New session", project_id: projects[0]?.id }) }); setSessions((items) => [session, ...items]); setSelectedSession(session.id); } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not create session"); }
+  };
+  const send = (event: FormEvent) => {
+    event.preventDefault(); if (!activeSession || !message.trim()) return;
+    const text = message.trim(); setMessage("");
+    const url = new URL(`/api/v1/sessions/${activeSession.id}/events`, window.location.href); url.protocol = url.protocol === "https:" ? "wss:" : "ws:"; url.searchParams.set("access_token", token);
+    const socket = new WebSocket(url);
+    socket.onopen = () => socket.send(JSON.stringify({ message: { role: "user", content: [{ type: "text", text }] } }));
+    socket.onmessage = (item) => { const eventData = JSON.parse(item.data) as { type: string }; if (["run.completed", "run.failed", "run.cancelled"].includes(eventData.type)) { socket.close(); void api<Snapshot>(`/api/v1/sessions/${activeSession.id}`).then(setSnapshot); } };
+    socket.onerror = () => setError("Conversation connection failed");
+  };
+  const saveSettings = async (event: FormEvent) => {
     event.preventDefault();
-    if (!sessionTitle.trim()) return;
-    try {
-      const created = await api<Session>("/api/v1/sessions", {
-        method: "POST",
-        body: JSON.stringify({
-          thread_id: crypto.randomUUID(),
-          title: sessionTitle.trim(),
-          project_id: projects[0]?.id,
-        }),
-      });
-      setSessionTitle(""); setSessions((current) => [created, ...current]); setSelectedSession(created.id);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "会话创建失败"); }
+    try { const updated = await api<RuntimeSettings>("/api/v1/settings", { method: "PUT", body: JSON.stringify({ idle_shutdown_minutes: Number(idleMinutes), model_provider: provider, model_name: modelName }) }); setSettings(updated); } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to save settings"); }
   };
-
-  const send = async (event: FormEvent) => {
+  const addUser = async (event: FormEvent) => {
     event.preventDefault();
-    if (!activeSession || !message.trim()) return;
-    const text = message.trim(); setMessage(""); setEventLog([]);
-    try {
-      const url = new URL(`/api/v1/sessions/${activeSession.id}/events`, window.location.href);
-      url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-      url.searchParams.set("access_token", token);
-      const socket = new WebSocket(url);
-      socket.onopen = () => socket.send(JSON.stringify({ provider: "fake", model: "fake-model", message: { role: "user", content: [{ type: "text", text }] } }));
-      socket.onmessage = (item) => {
-        const data = JSON.parse(item.data) as { sequence?: number; type: string; data?: { text?: string } };
-        setEventLog((current) => [...current, `${data.sequence ?? ""} ${data.type}${data.data?.text ? ` · ${data.data.text}` : ""}`]);
-        if (["run.completed", "run.failed", "run.cancelled"].includes(data.type)) { socket.close(); void api<Snapshot>(`/api/v1/sessions/${activeSession.id}`).then(setSnapshot); }
-      };
-      socket.onerror = () => setError("会话事件连接失败");
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "发送失败"); }
+    try { await api("/api/v1/settings/users", { method: "POST", body: JSON.stringify({ id: newUserId, display_name: newUserName, password: newUserPassword }) }); setNewUserId(""); setNewUserName(""); setNewUserPassword(""); await refresh(); } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to add user"); }
   };
 
-  if (!token) return <main className="login-page"><section className="login-card"><h1>DevPilot</h1><p>使用已授权账号登录。</p><form className="compact-form" onSubmit={login}><input aria-label="账号" value={username} onChange={(event) => setUsername(event.target.value)} /><input aria-label="密码" type="password" value={password} onChange={(event) => setPassword(event.target.value)} /><button type="submit">登录</button></form>{error && <p className="error">{error}</p>}</section></main>;
-
-  return <main>
-    <header><div><strong>DevPilot</strong><span>研发工作台</span></div><button onClick={() => void refresh()}>刷新</button></header>
-    {error && <p className="error">{error}</p>}
-    <section className="layout">
-      <aside>
-        <h2>项目</h2>
-        <form className="compact-form" onSubmit={registerProject}>
-          <input aria-label="项目名称" value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="项目名称" />
-          <input aria-label="项目路径" value={projectPath} onChange={(event) => setProjectPath(event.target.value)} placeholder="绝对路径或工作区相对路径" />
-          <button type="submit">登记项目</button>
-        </form>
-        {projects.map((item) => <div className="item" key={item.id}><b>{item.name}</b><small>{item.root_path}</small></div>)}
-        <h2>会话</h2>
-        <form className="compact-form" onSubmit={createSession}>
-          <input aria-label="会话标题" value={sessionTitle} onChange={(event) => setSessionTitle(event.target.value)} placeholder="新会话标题" />
-          <button type="submit">新建会话</button>
-        </form>
-        {sessions.map((item) => <button className={item.id === selectedSession ? "selected" : "item"} key={item.id} onClick={() => setSelectedSession(item.id)}>{item.title || item.thread_id}</button>)}
-      </aside>
-      <section className="conversation"><h1>{activeSession?.title || "选择一个会话"}</h1><div className="messages">{snapshot?.messages.map((item) => <article className={item.message.role} key={item.id}><label>{item.message.role}</label>{item.message.content.map((block, index) => <p key={index}>{block.text || block.content || `[${block.type}]`}</p>)}</article>)}</div><form onSubmit={send}><textarea aria-label="消息" value={message} onChange={(event) => setMessage(event.target.value)} placeholder="向 Agent 描述任务…" /><button type="submit" disabled={!activeSession}>发送</button></form>{eventLog.length > 0 && <details open><summary>实时事件</summary><pre>{eventLog.join("\n")}</pre></details>}</section>
-      <aside className="workflow"><h2>研发工作流</h2>{workflows.map((item) => <article className="item" key={item.id}><b>{item.issue.description}</b><small>{item.status} · {item.evidence.length} 项证据</small><ol>{item.events.map((event) => <li key={event.sequence}>{event.type}</li>)}</ol>{item.pr_document && <small>PR: {item.pr_document.title} ({item.pr_document.review_status})</small>}</article>)}<h2>可用模型</h2><p className="item">本地演示：fake / fake-model<br />配置凭据后可通过 API 使用 OpenAI 或 Anthropic。</p></aside>
-    </section>
-  </main>;
+  if (!token) return <main className="login-page"><section className="login-card"><h1>DevPilot</h1><form className="compact-form" onSubmit={login}><input aria-label="Username" value={username} onChange={(event) => setUsername(event.target.value)} /><input aria-label="Password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} /><button>Sign in</button></form>{error && <p className="error">{error}</p>}</section></main>;
+  return <main><header><div><strong>DevPilot</strong><span>Development workbench</span></div><button onClick={() => void refresh()}>Refresh</button></header>{error && <p className="error">{error}</p>}<section className="layout"><aside><h2>Projects</h2>{projects.map((project) => <p className="item" key={project.id}>{project.name}</p>)}<h2>Sessions</h2><button onClick={() => void createSession()}>New session</button>{sessions.map((session) => <button className={session.id === selectedSession ? "selected" : "item"} key={session.id} onClick={() => setSelectedSession(session.id)}>{session.title || session.thread_id}</button>)}</aside><section className="conversation"><h1>{activeSession?.title || "Select a session"}</h1><div className="messages">{snapshot?.messages.map((item) => <article className={item.message.role} key={item.id}><label>{item.message.role}</label>{item.message.content.map((block, index) => <p key={index}>{block.text || block.content || `[${block.type}]`}</p>)}</article>)}</div><form onSubmit={send}><textarea aria-label="Message" value={message} onChange={(event) => setMessage(event.target.value)} /><button disabled={!activeSession}>Send</button></form></section><aside className="workflow"><h2>Model</h2><p className="item">{settings ? `${settings.model_provider} / ${settings.model_name}` : "Default model"}</p>{currentUser === "admin" && <><h2>Local settings</h2><form className="compact-form" onSubmit={saveSettings}><input aria-label="Idle shutdown minutes" type="number" min="1" max="1440" value={idleMinutes} onChange={(event) => setIdleMinutes(event.target.value)} /><input aria-label="Model provider" value={provider} onChange={(event) => setProvider(event.target.value)} placeholder="fake, openai, anthropic, ollama" /><input aria-label="Model name" value={modelName} onChange={(event) => setModelName(event.target.value)} /><button>Save settings</button></form><h2>Add local user</h2><form className="compact-form" onSubmit={addUser}><input aria-label="User ID" value={newUserId} onChange={(event) => setNewUserId(event.target.value)} /><input aria-label="Display name" value={newUserName} onChange={(event) => setNewUserName(event.target.value)} /><input aria-label="Password" type="password" value={newUserPassword} onChange={(event) => setNewUserPassword(event.target.value)} /><button>Add user</button></form>{settings?.users.map((user) => <small className="item" key={user.id}>{user.display_name} ({user.id})</small>)}</>}</aside></section></main>;
 }
 
 createRoot(document.getElementById("root")!).render(<App />);

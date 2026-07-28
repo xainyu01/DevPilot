@@ -1,9 +1,12 @@
 """FastAPI entry point for the B4 persistence and development workflow boundary."""
 
+import asyncio
 import base64
 import hashlib
 import os
 import secrets
+import signal
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -46,8 +49,15 @@ from packages.contracts import (
 )
 from packages.dev_workflows import DevelopmentWorkflowService
 from packages.handover_agent import HandoverAgent
+from packages.local_settings import LocalSettings, LocalSettingsStore, LocalUser
 from packages.memory import LongTermMemoryStore
-from packages.model_gateway import FakeModel, ModelGateway
+from packages.model_gateway import (
+    AnthropicAdapter,
+    FakeModel,
+    ModelGateway,
+    OllamaAdapter,
+    OpenAIAdapter,
+)
 from packages.persistence import (
     Database,
     MemoryRepository,
@@ -61,7 +71,13 @@ from packages.persistence import (
 )
 from packages.project_context import ProjectContextService
 from packages.repo_intel import RepositoryScanner
-from packages.security import AuthenticationService, AuthSettings, LoginRateLimiter
+from packages.security import (
+    AuthenticatedUser,
+    AuthenticationService,
+    AuthSettings,
+    LoginRateLimiter,
+    hash_password,
+)
 from packages.team import AccessDeniedError, TeamService
 from packages.tool_runtime import ToolRuntime
 
@@ -129,8 +145,8 @@ class RunCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     message: ChatMessage
-    provider: str = "fake"
-    model: str = "fake-model"
+    provider: str | None = None
+    model: str | None = None
     run_id: str | None = None
 
 
@@ -190,6 +206,22 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class RuntimeSettingsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    idle_shutdown_minutes: int = Field(ge=1, le=1_440)
+    model_provider: str = Field(min_length=1, max_length=100)
+    model_name: str = Field(min_length=1, max_length=200)
+
+
+class LocalUserCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_.-]+$")
+    display_name: str = Field(min_length=1, max_length=200)
+    password: str = Field(min_length=8, max_length=1024)
+
+
 def create_app(
     *,
     database_url: str | None = None,
@@ -198,9 +230,14 @@ def create_app(
     auth_settings: AuthSettings | None = None,
 ) -> FastAPI:
     workspace = (workspace_root or project_root()).expanduser().resolve()
+    settings_store = LocalSettingsStore(workspace)
+    local_settings = settings_store.load()
     configured_url = database_url or os.environ.get("DEVPILOT_DATABASE_URL")
     database = Database(configured_url or default_database_url(workspace))
-    resolved_auth_settings = auth_settings or AuthSettings.from_environment()
+    configured_users = _configured_users(local_settings)
+    resolved_auth_settings = auth_settings or AuthSettings.from_environment(
+        additional_users=configured_users
+    )
     authentication = AuthenticationService(resolved_auth_settings)
     app = FastAPI(
         title="DevPilot API",
@@ -209,11 +246,15 @@ def create_app(
     )
     app.state.database = database
     app.state.workspace_root = workspace
-    app.state.agent_runtime = AgentRuntime(ModelGateway([FakeModel()]))
+    app.state.agent_runtime = AgentRuntime(_model_gateway(local_settings))
     app.state.runtime_logs: list[dict[str, object]] = []
     app.state.authentication = authentication
     app.state.auth_settings = resolved_auth_settings
     app.state.login_rate_limiter = LoginRateLimiter()
+    app.state.settings_store = settings_store
+    app.state.local_settings = local_settings
+    app.state.active_run_count = 0
+    app.state.last_user_activity = time.monotonic()
     database.create_all()
     for user in authentication.users:
         TeamRepository(database).create_user(
@@ -261,7 +302,20 @@ def create_app(
                 return _apply_security_headers(
                     Response(status_code=401, content="invalid or expired bearer token")
                 )
-        return _apply_security_headers(await call_next(request))
+        response = await call_next(request)
+        if request.method not in {"GET", "HEAD", "OPTIONS"} and response.status_code < 400:
+            app.state.last_user_activity = time.monotonic()
+        return _apply_security_headers(response)
+
+    @app.on_event("startup")
+    async def start_idle_shutdown_monitor() -> None:
+        app.state.idle_shutdown_task = asyncio.create_task(_idle_shutdown_monitor(app))
+
+    @app.on_event("shutdown")
+    async def stop_idle_shutdown_monitor() -> None:
+        task = getattr(app.state, "idle_shutdown_task", None)
+        if task is not None:
+            task.cancel()
 
     @app.get("/healthz", tags=["system"])
     def healthz() -> dict[str, str]:
@@ -342,16 +396,59 @@ def create_app(
         token = authentication.issue_access_token(user.user_id)
         return {"access_token": token, "token_type": "bearer", "user_id": user.user_id}
 
-        """
-        # TODO（后续 B8）：固定测试账号仅用于多人验收；预期改为可配置凭据与正式认证。
-        if payload.username not in account_names or not secrets.compare_digest(
-            payload.password, payload.username
-        ):
-            raise HTTPException(status_code=401, detail="invalid username or password")
-        token = secrets.token_urlsafe(32)
-        app.state.demo_tokens[token] = payload.username
-        return {"access_token": token, "token_type": "bearer", "user_id": payload.username}
-        """
+    @app.get("/api/v1/settings", tags=["settings"])
+    def get_runtime_settings(actor_id: str = Depends(_authenticated_actor)) -> dict[str, object]:
+        _require_local_administrator(actor_id)
+        return _public_runtime_settings(app.state.local_settings)
+
+    @app.put("/api/v1/settings", tags=["settings"])
+    def update_runtime_settings(
+        payload: RuntimeSettingsRequest, actor_id: str = Depends(_authenticated_actor)
+    ) -> dict[str, object]:
+        _require_local_administrator(actor_id)
+        current: LocalSettings = app.state.local_settings
+        updated = LocalSettings(
+            idle_shutdown_minutes=payload.idle_shutdown_minutes,
+            model_provider=payload.model_provider.strip().lower(),
+            model_name=payload.model_name.strip(),
+            users=current.users,
+        )
+        try:
+            _model_gateway(updated)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        app.state.settings_store.save(updated)
+        app.state.local_settings = updated
+        app.state.agent_runtime = AgentRuntime(_model_gateway(updated))
+        app.state.last_user_activity = time.monotonic()
+        return _public_runtime_settings(updated)
+
+    @app.post("/api/v1/settings/users", status_code=status.HTTP_201_CREATED, tags=["settings"])
+    def add_local_user(
+        payload: LocalUserCreateRequest, actor_id: str = Depends(_authenticated_actor)
+    ) -> dict[str, object]:
+        _require_local_administrator(actor_id)
+        current: LocalSettings = app.state.local_settings
+        reserved_ids = {"admin", "admin1", "admin2", "admin3"}
+        if payload.id in reserved_ids or any(user.user_id == payload.id for user in current.users):
+            raise HTTPException(status_code=409, detail="user id is already configured or reserved")
+        updated = LocalSettings(
+            idle_shutdown_minutes=current.idle_shutdown_minutes,
+            model_provider=current.model_provider,
+            model_name=current.model_name,
+            users=(
+                *current.users,
+                LocalUser(payload.id, payload.display_name, hash_password(payload.password)),
+            ),
+        )
+        app.state.settings_store.save(updated)
+        app.state.local_settings = updated
+        authentication.replace_users((*_fixed_auth_users(), *_configured_users(updated)))
+        TeamRepository(_database(app)).create_user(
+            UserRecord(id=payload.id, display_name=payload.display_name)
+        )
+        app.state.last_user_activity = time.monotonic()
+        return {"id": payload.id, "display_name": payload.display_name}
 
     @app.get("/api/v1/progress", tags=["project"])
     def progress() -> dict[str, object]:
@@ -642,14 +739,19 @@ def create_app(
             raise HTTPException(status_code=404, detail=f"session not found: {session_id}")
         _require_session_access(app, session, actor_id, SessionPermission.COLLABORATE)
         SessionRepository(_database(app)).append_message(session_id, payload.message)
+        configured: LocalSettings = app.state.local_settings
         request = RunRequest(
             thread_id=session.thread_id,
             run_id=payload.run_id or str(uuid4()),
-            provider=payload.provider,
-            model=payload.model,
+            provider=payload.provider or configured.model_provider,
+            model=payload.model or configured.model_name,
             messages=[payload.message],
         )
-        result = await _runtime(app).run(request)
+        app.state.active_run_count += 1
+        try:
+            result = await _runtime(app).run(request)
+        finally:
+            app.state.active_run_count -= 1
         if result.final_text:
             SessionRepository(_database(app)).append_message(
                 session_id, ChatMessage.from_text("assistant", result.final_text)
@@ -683,19 +785,25 @@ def create_app(
         try:
             while True:
                 payload = RunCreateRequest.model_validate(await websocket.receive_json())
+                app.state.last_user_activity = time.monotonic()
                 SessionRepository(_database(app)).append_message(session_id, payload.message)
+                configured: LocalSettings = app.state.local_settings
                 request = RunRequest(
                     thread_id=session.thread_id,
                     run_id=payload.run_id or str(uuid4()),
-                    provider=payload.provider,
-                    model=payload.model,
+                    provider=payload.provider or configured.model_provider,
+                    model=payload.model or configured.model_name,
                     messages=[payload.message],
                 )
                 final_text = None
-                async for event in _runtime(app).stream(request):
-                    await websocket.send_json(event.model_dump(mode="json"))
-                    if event.type.value == "run.completed":
-                        final_text = event.data.get("text")
+                app.state.active_run_count += 1
+                try:
+                    async for event in _runtime(app).stream(request):
+                        await websocket.send_json(event.model_dump(mode="json"))
+                        if event.type.value == "run.completed":
+                            final_text = event.data.get("text")
+                finally:
+                    app.state.active_run_count -= 1
                 if final_text:
                     SessionRepository(_database(app)).append_message(
                         session_id, ChatMessage.from_text("assistant", str(final_text))
@@ -1082,6 +1190,75 @@ def _record_runtime_log(
 def _database(app: FastAPI) -> Database:
     database: Database = app.state.database
     return database
+
+
+def _configured_users(settings: LocalSettings) -> tuple[AuthenticatedUser, ...]:
+    return tuple(
+        AuthenticatedUser(
+            user_id=user.user_id, display_name=user.display_name, password_hash=user.password_hash
+        )
+        for user in settings.users
+    )
+
+
+def _fixed_auth_users() -> tuple[AuthenticatedUser, ...]:
+    """Keep B7's required fixed accounts alongside user-managed local accounts."""
+    return AuthSettings.development().users
+
+
+def _model_gateway(settings: LocalSettings) -> ModelGateway:
+    provider = settings.model_provider
+    if provider == "fake":
+        adapter = FakeModel(model=settings.model_name)
+    elif provider == "openai":
+        adapter = OpenAIAdapter(model=settings.model_name)
+    elif provider == "anthropic":
+        adapter = AnthropicAdapter(model=settings.model_name)
+    elif provider == "ollama":
+        # TODO（后续模型批次）：Ollama 仅保留显式未实现适配器，调用时返回明确状态。
+        adapter = OllamaAdapter(model=settings.model_name)
+    else:
+        raise ValueError("model provider must be one of: fake, openai, anthropic, ollama")
+    return ModelGateway([adapter])
+
+
+def _public_runtime_settings(settings: LocalSettings) -> dict[str, object]:
+    return {
+        "idle_shutdown_minutes": settings.idle_shutdown_minutes,
+        "model_provider": settings.model_provider,
+        "model_name": settings.model_name,
+        "users": [
+            {"id": user.user_id, "display_name": user.display_name} for user in settings.users
+        ],
+    }
+
+
+def _require_local_administrator(actor_id: str) -> None:
+    if actor_id != "admin":
+        raise HTTPException(status_code=403, detail="the fixed admin account is required")
+
+
+async def _idle_shutdown_monitor(app: FastAPI) -> None:
+    """Stop the local process after user inactivity once no model output is in flight."""
+    while True:
+        await asyncio.sleep(1)
+        settings: LocalSettings = app.state.local_settings
+        idle_seconds = settings.idle_shutdown_minutes * 60
+        idle_elapsed = time.monotonic() - app.state.last_user_activity
+        if app.state.active_run_count or idle_elapsed < idle_seconds:
+            continue
+        _record_runtime_log(
+            app,
+            event="service.idle_shutdown",
+            message="No user activity or active model output; stopping local process",
+            data={"idle_shutdown_minutes": settings.idle_shutdown_minutes},
+        )
+        callback = getattr(app.state, "shutdown_callback", None)
+        if callback is not None:
+            callback()
+        else:
+            os.kill(os.getpid(), signal.SIGTERM)
+        return
 
 
 def _runtime(app: FastAPI) -> AgentRuntime:

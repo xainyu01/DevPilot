@@ -31,6 +31,7 @@ pnpm --dir apps/web build
 ```
 
 本地运行数据位于 `.devpilot/`，不应提交到仓库。完整的标识迁移说明见 [命名迁移](docs/BRANDING_MIGRATION.md)。
+本地的模型、用户和空闲自动关闭设置见 [本地运行设置](docs/LOCAL_SETTINGS.md)。
 
 ## 文档
 

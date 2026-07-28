@@ -15,6 +15,9 @@ node_modules/
 apps/web/dist/
 *.tsbuildinfo
 
+# Local Windows launcher
+start-devpilot.bat
+
 # Local runtime data
 .devpilot/
 # Legacy local runtime data is intentionally ignored to prevent accidental publication.

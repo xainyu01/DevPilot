@@ -62,7 +62,12 @@ class AuthSettings:
         )
 
     @classmethod
-    def from_environment(cls, environ: Mapping[str, str] | None = None) -> AuthSettings:
+    def from_environment(
+        cls,
+        environ: Mapping[str, str] | None = None,
+        *,
+        additional_users: tuple[AuthenticatedUser, ...] = (),
+    ) -> AuthSettings:
         """Load a deployment signing secret or fixed release-candidate defaults.
 
         ``DEVPILOT_ENV=production`` requires a signing secret. The B7 account/
@@ -73,7 +78,12 @@ class AuthSettings:
         values = os.environ if environ is None else environ
         environment = values.get("DEVPILOT_ENV", "development").strip().lower()
         if environment == "development":
-            return cls.development()
+            base = cls.development()
+            return cls(
+                environment=base.environment,
+                token_secret=base.token_secret,
+                users=_merge_users(_fixed_b7_users(), additional_users),
+            )
         if environment != "production":
             raise AuthenticationConfigurationError(
                 "DEVPILOT_ENV must be either development or production"
@@ -87,7 +97,7 @@ class AuthSettings:
         return cls(
             environment="production",
             token_secret=secret.encode("utf-8"),
-            users=_fixed_b7_users(),
+            users=_merge_users(_fixed_b7_users(), additional_users),
             token_ttl_seconds=_read_duration(values, "DEVPILOT_AUTH_TOKEN_TTL_SECONDS", 3_600),
             host_token_ttl_seconds=_read_duration(
                 values, "DEVPILOT_HOST_TOKEN_TTL_SECONDS", 2_592_000
@@ -106,6 +116,10 @@ class AuthenticationService:
     @property
     def users(self) -> tuple[AuthenticatedUser, ...]:
         return tuple(self._users.values())
+
+    def replace_users(self, users: tuple[AuthenticatedUser, ...]) -> None:
+        """Apply local-account changes without weakening token signing policy."""
+        self._users = {user.user_id: user for user in users}
 
     def authenticate_password(self, user_id: str, password: str) -> AuthenticatedUser | None:
         user = self._users.get(user_id)
@@ -254,6 +268,19 @@ def _fixed_b7_users() -> tuple[AuthenticatedUser, ...]:
         )
         for user_id in ("admin", "admin1", "admin2", "admin3")
     )
+
+
+def _merge_users(
+    fixed_users: tuple[AuthenticatedUser, ...], additional_users: tuple[AuthenticatedUser, ...]
+) -> tuple[AuthenticatedUser, ...]:
+    users = {user.user_id: user for user in fixed_users}
+    for user in additional_users:
+        if user.user_id in users:
+            raise AuthenticationConfigurationError(
+                f"local user id conflicts with required fixed user: {user.user_id}"
+            )
+        users[user.user_id] = user
+    return tuple(users.values())
 
 
 def _read_duration(values: Mapping[str, str], name: str, default: int) -> int:

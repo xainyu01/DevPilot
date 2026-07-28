@@ -268,8 +268,8 @@ def create_session(
 def chat(
     session_id: str,
     text: str,
-    provider: str = typer.Option("fake"),
-    model: str = typer.Option("fake-model"),
+    provider: str | None = typer.Option(None, help="Override the configured model provider."),
+    model: str | None = typer.Option(None, help="Override the configured model name."),
     api_url: str = typer.Option("http://127.0.0.1:8000"),
 ) -> None:
     """Send a message and print the deterministic or configured model response."""
