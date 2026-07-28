@@ -62,3 +62,11 @@ uv --cache-dir .uv-cache run codeassist handover write --reason paused
 - 对未来平台适配，优先抽取端口/协议/适配器接口；Linux、macOS、桌面壳层、远程控制、真实供应商等未到当前批次的实现只保留接口、能力声明和 TODO，不得把平台分支散落到领域核心。
 - 新增 TODO 时同步更新 `docs/progress.json`、`docs/PROGRESS.md` 或相关架构文档；完成 TODO 前先补测试和验收标准。
 - 注释示例：`# TODO（后续 B7）：暂不实现 Linux 适配器，当前仅保留 PlatformAdapter 接口并返回 declared_not_implemented。`
+
+## GitHub 公开仓库与本地学习资料规则
+
+- `master` 是公开代码分支，对应 GitHub 远程 `origin/main`；公开提交不得包含 `docs/learn/`。
+- `local-with-learn` 是本地资料分支，保留 `docs/learn/` 的版本历史；禁止向任何远程仓库推送该分支。
+- `docs/learn/` 已加入 `.gitignore`。如果必须在本地资料分支追踪新学习文件，只能在 `local-with-learn` 上显式暂存，不能在 `master` 上使用 `git add -f`。
+- 公开代码提交流程必须在 `master` 上完成，并使用 `git push origin master:main`；推送前检查 `git ls-tree -r --name-only HEAD docs/learn` 不应有输出。
+- 如果发现公开分支历史包含 `docs/learn/`，必须先保留本地备份分支，再过滤公开历史；不得直接删除本地学习资料或覆盖 `local-with-learn`。
