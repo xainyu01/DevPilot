@@ -1,8 +1,8 @@
 {
-  "overall_percent": 70,
-  "current_batch": "B4",
-  "next_action": "开始阶段 5：实现 CLI 与 Web 工作台",
-  "updated_at": "2026-07-28T19:01:20+08:00",
+  "overall_percent": 80,
+  "current_batch": "B5",
+  "next_action": "开始阶段 6：实现 Tauri 桌面端与跨平台集成",
+  "updated_at": "2026-07-28T20:30:00+08:00",
   "constraints": [
     "所有新产生的文档放在 docs/ 目录",
     "Python 依赖只使用 uv 管理，并提交 uv.lock",
@@ -102,18 +102,35 @@
         "新增 repository_profiles、workflow_runs 持久化和 B4 Alembic 迁移"
       ],
       "in_progress": [],
-      "next_steps": ["B5 完成 CLI 与 Web 工作台"],
+      "next_steps": [],
       "blockers": []
     },
     {
-      "id": "B5-B8",
-      "title": "阶段 5～8：客户端、团队与发布",
+      "id": "B5",
+      "title": "阶段 5：CLI 与 Web 工作台",
+      "status": "已完成（本批次）",
+      "percent": 100,
+      "scope": ["CLI", "React Web", "会话事件", "附件", "研发工作流视图"],
+      "completed": [
+        "通过 ADR-0002 确认 Python uv 与 apps/web pnpm 的独立锁定边界",
+        "实现项目、会话、聊天和工作流 CLI 命令",
+        "实现会话运行 REST、WebSocket 顺序事件和受限附件 API",
+        "实现 React/Vite 工作台，展示项目、会话、实时事件和研发工作流证据",
+        "增加 B5 客户端 API 契约测试并完成前端生产构建"
+      ],
+      "in_progress": [],
+      "next_steps": ["B6 实现 Tauri 桌面端与跨平台集成"],
+      "blockers": []
+    },
+    {
+      "id": "B6-B8",
+      "title": "阶段 6～8：桌面端、团队与发布",
       "status": "未开始",
       "percent": 0,
-      "scope": ["CLI/Web", "Tauri", "团队共享", "稳定化发布"],
+      "scope": ["Tauri", "团队共享", "稳定化发布"],
       "completed": [],
       "in_progress": [],
-      "next_steps": ["完成前一批验收后拆分下一批"],
+      "next_steps": ["完成 B6 桌面端与跨平台集成"],
       "blockers": []
     }
   ]

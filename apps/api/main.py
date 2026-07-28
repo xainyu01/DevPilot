@@ -1,21 +1,26 @@
 """FastAPI entry point for the B4 persistence and development workflow boundary."""
 
+import base64
 import os
 from pathlib import Path
+from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, Query, Response, status
+from fastapi import FastAPI, HTTPException, Query, Response, WebSocket, WebSocketDisconnect, status
 from pydantic import BaseModel, ConfigDict, Field
 
+from packages.agent_core import AgentRuntime
 from packages.contracts import (
     ChatMessage,
     IssueContext,
     MemoryScope,
     ReviewStatus,
+    RunRequest,
     SessionRecord,
 )
 from packages.dev_workflows import DevelopmentWorkflowService
 from packages.handover_agent import HandoverAgent
 from packages.memory import LongTermMemoryStore
+from packages.model_gateway import FakeModel, ModelGateway
 from packages.persistence import (
     Database,
     MemoryRepository,
@@ -90,6 +95,23 @@ class ReviewDecisionRequest(BaseModel):
     status: ReviewStatus
 
 
+class RunCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    message: ChatMessage
+    provider: str = "fake"
+    model: str = "fake-model"
+    run_id: str | None = None
+
+
+class AttachmentCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    filename: str = Field(min_length=1, max_length=255)
+    mime_type: str = Field(min_length=1, max_length=255)
+    content_base64: str = Field(min_length=1)
+
+
 def create_app(
     *,
     database_url: str | None = None,
@@ -105,6 +127,7 @@ def create_app(
     )
     app.state.database = database
     app.state.workspace_root = workspace
+    app.state.agent_runtime = AgentRuntime(ModelGateway([FakeModel()]))
 
     @app.get("/healthz", tags=["system"])
     def healthz() -> dict[str, str]:
@@ -115,7 +138,7 @@ def create_app(
         return {
             "name": "codeassist-next",
             "version": "0.1.0",
-            "stage": 4,
+            "stage": 5,
             "dependency_manager": "uv",
             "features": {
                 "agent_core": "available",
@@ -136,7 +159,7 @@ def create_app(
                 "development_workflows": "available",
                 "test_orchestrator": "available",
                 "pr_documents": "available_with_review_gate",
-                "frontend": "planned",
+                "frontend": "available",
                 "tauri": "planned",
             },
         }
@@ -202,6 +225,87 @@ def create_app(
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return stored.model_dump(mode="json")
+
+    @app.post("/api/v1/sessions/{session_id}/attachments", status_code=status.HTTP_201_CREATED)
+    def create_attachment(session_id: str, payload: AttachmentCreateRequest) -> dict[str, str]:
+        if SessionRepository(_database(app)).get(session_id) is None:
+            raise HTTPException(status_code=404, detail=f"session not found: {session_id}")
+        filename = Path(payload.filename).name
+        if filename != payload.filename or not filename:
+            raise HTTPException(
+                status_code=422,
+                detail="attachment filename must not include a path",
+            )
+        try:
+            content = base64.b64decode(payload.content_base64, validate=True)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422, detail="attachment content must be base64"
+            ) from exc
+        attachment_id = str(uuid4())
+        directory = workspace / ".codeassist" / "attachments" / session_id
+        directory.mkdir(parents=True, exist_ok=True)
+        target = directory / attachment_id
+        target.write_bytes(content)
+        return {
+            "id": attachment_id,
+            "filename": filename,
+            "mime_type": payload.mime_type,
+            "size": str(len(content)),
+        }
+
+    @app.post("/api/v1/sessions/{session_id}/runs", status_code=status.HTTP_201_CREATED)
+    async def create_run(session_id: str, payload: RunCreateRequest) -> dict[str, object]:
+        session = SessionRepository(_database(app)).get(session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail=f"session not found: {session_id}")
+        SessionRepository(_database(app)).append_message(session_id, payload.message)
+        request = RunRequest(
+            thread_id=session.thread_id,
+            run_id=payload.run_id or str(uuid4()),
+            provider=payload.provider,
+            model=payload.model,
+            messages=[payload.message],
+        )
+        result = await _runtime(app).run(request)
+        if result.final_text:
+            SessionRepository(_database(app)).append_message(
+                session_id, ChatMessage.from_text("assistant", result.final_text)
+            )
+        return result.model_dump(mode="json")
+
+    @app.websocket("/api/v1/sessions/{session_id}/events")
+    async def session_events(websocket: WebSocket, session_id: str) -> None:
+        await websocket.accept()
+        session = SessionRepository(_database(app)).get(session_id)
+        if session is None:
+            await websocket.send_json({"type": "error", "detail": "session not found"})
+            await websocket.close(code=4404)
+            return
+        try:
+            while True:
+                payload = RunCreateRequest.model_validate(await websocket.receive_json())
+                SessionRepository(_database(app)).append_message(session_id, payload.message)
+                request = RunRequest(
+                    thread_id=session.thread_id,
+                    run_id=payload.run_id or str(uuid4()),
+                    provider=payload.provider,
+                    model=payload.model,
+                    messages=[payload.message],
+                )
+                final_text = None
+                async for event in _runtime(app).stream(request):
+                    await websocket.send_json(event.model_dump(mode="json"))
+                    if event.type.value == "run.completed":
+                        final_text = event.data.get("text")
+                if final_text:
+                    SessionRepository(_database(app)).append_message(
+                        session_id, ChatMessage.from_text("assistant", str(final_text))
+                    )
+        except WebSocketDisconnect:
+            return
+        except ValueError as exc:
+            await websocket.send_json({"type": "error", "detail": str(exc)})
 
     @app.post("/api/v1/sessions/{session_id}/summarize", tags=["sessions"])
     def summarize_session(
@@ -412,6 +516,10 @@ def _database(app: FastAPI) -> Database:
     database: Database = app.state.database
     database.create_all()
     return database
+
+
+def _runtime(app: FastAPI) -> AgentRuntime:
+    return app.state.agent_runtime
 
 
 def _memory_store(app: FastAPI, scope: MemoryScope, owner_id: str) -> LongTermMemoryStore:
