@@ -8,9 +8,11 @@ type Block = { type: string; text?: string; content?: string; filename?: string 
 type StoredMessage = { id: string; ordinal: number; message: { role: string; content: Block[] } };
 type Snapshot = { session: Session; messages: StoredMessage[] };
 type Workflow = { id: string; status: string; issue: { description: string }; evidence: unknown[]; events: { sequence: number; type: string }[]; pr_document?: { title: string; review_status: string } };
+type LoginResponse = { access_token: string; user_id: string };
 
-const api = async <T,>(path: string, init?: RequestInit): Promise<T> => {
-  const response = await fetch(path, { ...init, headers: { "Content-Type": "application/json", ...init?.headers } });
+const api = async <T,>(path: string, init?: RequestInit, token?: string): Promise<T> => {
+  const bearer = token || localStorage.getItem("codeassist_demo_token") || "";
+  const response = await fetch(path, { ...init, headers: { "Content-Type": "application/json", ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}), ...init?.headers } });
   if (!response.ok) throw new Error((await response.json().catch(() => ({ detail: response.statusText }))).detail);
   return response.json() as Promise<T>;
 };
@@ -27,6 +29,9 @@ function App() {
   const [sessionTitle, setSessionTitle] = useState("");
   const [eventLog, setEventLog] = useState<string[]>([]);
   const [error, setError] = useState<string>();
+  const [token, setToken] = useState(() => localStorage.getItem("codeassist_demo_token") || "");
+  const [username, setUsername] = useState("admin");
+  const [password, setPassword] = useState("admin");
 
   const activeSession = useMemo(() => sessions.find((item) => item.id === selectedSession), [sessions, selectedSession]);
   const refresh = async () => {
@@ -39,7 +44,7 @@ function App() {
       setError(undefined);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "无法连接 API"); }
   };
-  useEffect(() => { void refresh(); }, []);
+  useEffect(() => { if (token) void refresh(); }, [token]);
   useEffect(() => { if (selectedSession) void api<Snapshot>(`/api/v1/sessions/${selectedSession}`).then(setSnapshot).catch((cause: Error) => setError(cause.message)); }, [selectedSession]);
 
   const registerProject = async (event: FormEvent) => {
@@ -52,6 +57,15 @@ function App() {
       });
       setProjectName(""); setProjectPath(""); await refresh();
     } catch (cause) { setError(cause instanceof Error ? cause.message : "项目登记失败"); }
+  };
+
+  const login = async (event: FormEvent) => {
+    event.preventDefault();
+    try {
+      const result = await api<LoginResponse>("/api/v1/auth/login", { method: "POST", body: JSON.stringify({ username, password }) });
+      localStorage.setItem("codeassist_demo_token", result.access_token);
+      setToken(result.access_token); setPassword(""); setError(undefined);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "登录失败"); }
   };
 
   const createSession = async (event: FormEvent) => {
@@ -77,6 +91,7 @@ function App() {
     try {
       const url = new URL(`/api/v1/sessions/${activeSession.id}/events`, window.location.href);
       url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+      url.searchParams.set("access_token", token);
       const socket = new WebSocket(url);
       socket.onopen = () => socket.send(JSON.stringify({ provider: "fake", model: "fake-model", message: { role: "user", content: [{ type: "text", text }] } }));
       socket.onmessage = (item) => {
@@ -87,6 +102,8 @@ function App() {
       socket.onerror = () => setError("会话事件连接失败");
     } catch (cause) { setError(cause instanceof Error ? cause.message : "发送失败"); }
   };
+
+  if (!token) return <main className="login-page"><section className="login-card"><h1>CodeAssist Demo</h1><p>使用演示管理员账号登录。</p><form className="compact-form" onSubmit={login}><input aria-label="账号" value={username} onChange={(event) => setUsername(event.target.value)} /><input aria-label="密码" type="password" value={password} onChange={(event) => setPassword(event.target.value)} /><button type="submit">登录</button></form>{error && <p className="error">{error}</p>}</section></main>;
 
   return <main>
     <header><div><strong>CodeAssist</strong><span>研发工作台</span></div><button onClick={() => void refresh()}>刷新</button></header>

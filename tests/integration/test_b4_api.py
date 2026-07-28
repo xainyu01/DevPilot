@@ -7,6 +7,13 @@ from fastapi.testclient import TestClient
 from apps.api.main import create_app
 
 
+def authenticate(client: TestClient) -> None:
+    token = client.post(
+        "/api/v1/auth/login", json={"username": "admin", "password": "admin"}
+    ).json()["access_token"]
+    client.headers.update({"Authorization": f"Bearer {token}"})
+
+
 def test_b4_api_scans_and_restores_workflow_and_pr_document(tmp_path: Path) -> None:
     database_url = f"sqlite:///{(tmp_path / 'b4.db').as_posix()}"
     root = tmp_path / "project"
@@ -14,6 +21,7 @@ def test_b4_api_scans_and_restores_workflow_and_pr_document(tmp_path: Path) -> N
     (root / "app.py").write_text("def broken():\n    return False\n", encoding="utf-8")
     app = create_app(database_url=database_url, workspace_root=tmp_path)
     with TestClient(app) as client:
+        authenticate(client)
         project = client.post(
             "/api/v1/projects",
             json={"name": "b4-project", "root_path": str(root)},
@@ -43,6 +51,7 @@ def test_b4_api_scans_and_restores_workflow_and_pr_document(tmp_path: Path) -> N
 
     restarted = create_app(database_url=database_url, workspace_root=tmp_path)
     with TestClient(restarted) as client:
+        authenticate(client)
         restored = client.get(f"/api/v1/workflows/{workflow_id}")
         assert restored.status_code == 200
         assert restored.json()["pr_document"]["review_status"] == "pending"

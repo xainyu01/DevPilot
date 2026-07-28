@@ -5,11 +5,19 @@ from fastapi.testclient import TestClient
 from apps.api.main import create_app
 
 
+def authenticate(client: TestClient) -> None:
+    token = client.post(
+        "/api/v1/auth/login", json={"username": "admin", "password": "admin"}
+    ).json()["access_token"]
+    client.headers.update({"Authorization": f"Bearer {token}"})
+
+
 def test_b5_session_run_preserves_message_and_event_order(tmp_path) -> None:
     app = create_app(
         database_url=f"sqlite:///{(tmp_path / 'b5.db').as_posix()}", workspace_root=tmp_path
     )
     with TestClient(app) as client:
+        authenticate(client)
         session = client.post(
             "/api/v1/sessions", json={"thread_id": "b5-thread", "title": "B5 session"}
         ).json()

@@ -2,11 +2,22 @@
 
 import base64
 import os
+import secrets
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, Query, Response, WebSocket, WebSocketDisconnect, status
+from fastapi import (
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Query,
+    Response,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.responses import FileResponse
 from starlette.staticfiles import StaticFiles
@@ -16,9 +27,17 @@ from packages.contracts import (
     ChatMessage,
     IssueContext,
     MemoryScope,
+    ProjectMember,
+    RemoteHost,
     ReviewStatus,
     RunRequest,
+    SessionPermission,
     SessionRecord,
+    SessionShare,
+    TeamMember,
+    TeamRecord,
+    TeamRole,
+    UserRecord,
 )
 from packages.dev_workflows import DevelopmentWorkflowService
 from packages.handover_agent import HandoverAgent
@@ -31,11 +50,13 @@ from packages.persistence import (
     RepositoryProfileRepository,
     RuleRepository,
     SessionRepository,
+    TeamRepository,
     WorkflowRepository,
     default_database_url,
 )
 from packages.project_context import ProjectContextService
 from packages.repo_intel import RepositoryScanner
+from packages.team import AccessDeniedError, TeamService
 from packages.tool_runtime import ToolRuntime
 
 
@@ -115,6 +136,54 @@ class AttachmentCreateRequest(BaseModel):
     content_base64: str = Field(min_length=1)
 
 
+class UserCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str | None = None
+    display_name: str = Field(min_length=1, max_length=200)
+
+
+class TeamCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=200)
+
+
+class TeamMemberRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    user_id: str = Field(min_length=1)
+    role: TeamRole
+
+
+class ProjectMemberRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    user_id: str = Field(min_length=1)
+    role: TeamRole
+
+
+class SessionShareRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    recipient_id: str = Field(min_length=1)
+    permission: SessionPermission
+
+
+class RemoteHostRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=200)
+    capabilities: list[str] = Field(default_factory=list)
+
+
+class RemoteHostPairRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    pairing_code: str = Field(min_length=16, max_length=256)
+
+
+class LoginRequest(BaseModel):
+    """Demo-only fixed administrator login; replace in B8 before deployment."""
+
+    model_config = ConfigDict(extra="forbid")
+    username: str
+    password: str
+
+
 def create_app(
     *,
     database_url: str | None = None,
@@ -133,6 +202,11 @@ def create_app(
     app.state.workspace_root = workspace
     app.state.agent_runtime = AgentRuntime(ModelGateway([FakeModel()]))
     app.state.runtime_logs: list[dict[str, object]] = []
+    app.state.demo_tokens: set[str] = set()
+    app.state.host_pairing_codes: dict[str, str] = {}
+    app.state.host_tokens: dict[str, str] = {}
+    _database(app)
+    TeamRepository(database).create_user(UserRecord(id="admin", display_name="Administrator"))
     _record_runtime_log(
         app,
         event="service.initialized",
@@ -142,6 +216,32 @@ def create_app(
             "web_dist": str(web_dist_path or workspace / "apps" / "web" / "dist"),
         },
     )
+
+    def _authenticated_actor(authorization: str | None = Header(default=None)) -> str:
+        """Authenticate the demo bearer token without exposing an actor-id request field."""
+        if authorization is None or not authorization.startswith("Bearer "):
+            raise HTTPException(status_code=401, detail="bearer token is required")
+        token = authorization.removeprefix("Bearer ")
+        if token not in app.state.demo_tokens:
+            raise HTTPException(status_code=401, detail="invalid or expired bearer token")
+        return "admin"
+
+    @app.middleware("http")
+    async def require_demo_auth(request, call_next):
+        """Protect every HTTP API except service metadata and the demo login exchange."""
+        public_paths = {"/healthz", "/api/v1/meta", "/api/v1/auth/login", "/api/v1/progress"}
+        host_path = request.url.path.startswith("/api/v1/remote-hosts/")
+        if (
+            request.url.path.startswith("/api/v1/")
+            and request.url.path not in public_paths
+            and not host_path
+        ):
+            authorization = request.headers.get("authorization")
+            if authorization is None or not authorization.startswith("Bearer "):
+                return Response(status_code=401, content="bearer token is required")
+            if authorization.removeprefix("Bearer ") not in app.state.demo_tokens:
+                return Response(status_code=401, content="invalid or expired bearer token")
+        return await call_next(request)
 
     @app.get("/healthz", tags=["system"])
     def healthz() -> dict[str, str]:
@@ -163,7 +263,7 @@ def create_app(
                 "ollama_adapter": "declared_not_implemented",
                 "handover_agent": "available",
                 "tool_runtime": "available",
-            "policy_engine": "available",
+                "policy_engine": "available",
                 "approvals": "available_in_memory",
                 "persistence": "available",
                 "session_memory": "available",
@@ -178,6 +278,10 @@ def create_app(
                 "desktop_shell": "deferred_optional",
                 "project_registration": "available_with_path_validation",
                 "runtime_logs": "available",
+                "demo_auth": "available_with_fixed_admin_credentials",
+                "team_rbac": "available_for_authenticated_admin",
+                "session_sharing": "available_with_explicit_permission",
+                "remote_agent_host": "declared_not_connected",
             },
         }
 
@@ -185,6 +289,18 @@ def create_app(
     def runtime_logs(limit: int = Query(default=100, ge=1, le=200)) -> list[dict[str, object]]:
         """Return recent local service events for the Web diagnostics panel."""
         return list(app.state.runtime_logs[-limit:])
+
+    @app.post("/api/v1/auth/login", tags=["auth"])
+    def login(payload: LoginRequest) -> dict[str, str]:
+        # TODO（后续 B8）：Demo 固定账号密码仅用于本地验收；预期改为可配置凭据与正式认证。
+        if not (
+            secrets.compare_digest(payload.username, "admin")
+            and secrets.compare_digest(payload.password, "admin")
+        ):
+            raise HTTPException(status_code=401, detail="invalid username or password")
+        token = secrets.token_urlsafe(32)
+        app.state.demo_tokens.add(token)
+        return {"access_token": token, "token_type": "bearer", "user_id": "admin"}
 
     @app.get("/api/v1/progress", tags=["project"])
     def progress() -> dict[str, object]:
@@ -195,12 +311,12 @@ def create_app(
     def tools() -> list[dict[str, object]]:
         """Expose registered tool schemas without exposing execution handles."""
         runtime = ToolRuntime(project_root())
-        return [
-            definition.model_dump(mode="json") for definition in runtime.registry.definitions()
-        ]
+        return [definition.model_dump(mode="json") for definition in runtime.registry.definitions()]
 
     @app.post("/api/v1/projects", status_code=status.HTTP_201_CREATED, tags=["project"])
-    def create_project(payload: ProjectCreateRequest) -> dict[str, object]:
+    def create_project(
+        payload: ProjectCreateRequest, actor_id: str = Depends(_authenticated_actor)
+    ) -> dict[str, object]:
         db = _database(app)
         repository = ProjectRepository(db)
         try:
@@ -208,6 +324,9 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         project = repository.get_or_create(name=payload.name, root_path=str(root_path))
+        TeamRepository(db).set_project_member(
+            ProjectMember(project_id=project.id, user_id=actor_id, role=TeamRole.OWNER)
+        )
         _record_runtime_log(
             app,
             event="project.registered",
@@ -221,12 +340,67 @@ def create_app(
         projects = ProjectRepository(_database(app)).list()
         return [project.model_dump(mode="json") for project in projects]
 
+    @app.post("/api/v1/users", status_code=status.HTTP_201_CREATED, tags=["teams"])
+    def create_user(
+        payload: UserCreateRequest, actor_id: str = Depends(_authenticated_actor)
+    ) -> dict[str, object]:
+        user = UserRecord(id=payload.id or str(uuid4()), display_name=payload.display_name)
+        return TeamRepository(_database(app)).create_user(user).model_dump(mode="json")
+
+    @app.post("/api/v1/teams", status_code=status.HTTP_201_CREATED, tags=["teams"])
+    def create_team(
+        payload: TeamCreateRequest, actor_id: str = Depends(_authenticated_actor)
+    ) -> dict[str, object]:
+        try:
+            team = TeamRepository(_database(app)).create_team(
+                TeamRecord(name=payload.name), actor_id
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return team.model_dump(mode="json")
+
+    @app.put("/api/v1/teams/{team_id}/members", tags=["teams"])
+    def set_team_member(
+        team_id: str, payload: TeamMemberRequest, actor_id: str = Depends(_authenticated_actor)
+    ) -> dict[str, object]:
+        repository = TeamRepository(_database(app))
+        try:
+            TeamService(repository).require_team_admin(team_id, actor_id)
+            member = repository.set_team_member(
+                TeamMember(team_id=team_id, user_id=payload.user_id, role=payload.role)
+            )
+        except AccessDeniedError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return member.model_dump(mode="json")
+
+    @app.put("/api/v1/projects/{project_id}/members", tags=["teams"])
+    def set_project_member(
+        project_id: str,
+        payload: ProjectMemberRequest,
+        actor_id: str = Depends(_authenticated_actor),
+    ) -> dict[str, object]:
+        repository = TeamRepository(_database(app))
+        if ProjectRepository(_database(app)).get(project_id) is None:
+            raise HTTPException(status_code=404, detail=f"project not found: {project_id}")
+        try:
+            TeamService(repository).require_project_write(project_id, actor_id)
+            member = repository.set_project_member(
+                ProjectMember(project_id=project_id, user_id=payload.user_id, role=payload.role)
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return member.model_dump(mode="json")
+
     @app.post("/api/v1/sessions", status_code=status.HTTP_201_CREATED, tags=["sessions"])
-    def create_session(payload: SessionCreateRequest) -> dict[str, object]:
+    def create_session(
+        payload: SessionCreateRequest, actor_id: str = Depends(_authenticated_actor)
+    ) -> dict[str, object]:
         session = SessionRepository(_database(app)).create(
             SessionRecord(
                 thread_id=payload.thread_id,
-                user_id=payload.user_id,
+                user_id=actor_id,
                 project_id=payload.project_id,
                 title=payload.title,
             )
@@ -249,6 +423,70 @@ def create_app(
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return snapshot.model_dump(mode="json")
+
+    @app.put("/api/v1/sessions/{session_id}/shares", tags=["teams"])
+    def share_session(
+        session_id: str, payload: SessionShareRequest, actor_id: str = Depends(_authenticated_actor)
+    ) -> dict[str, object]:
+        session = SessionRepository(_database(app)).get(session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail=f"session not found: {session_id}")
+        if session.user_id != actor_id:
+            raise HTTPException(status_code=403, detail="only the session owner can share it")
+        try:
+            share = TeamRepository(_database(app)).set_session_share(
+                SessionShare(
+                    session_id=session_id,
+                    recipient_id=payload.recipient_id,
+                    permission=payload.permission,
+                )
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return share.model_dump(mode="json")
+
+    @app.post(
+        "/api/v1/teams/{team_id}/remote-hosts",
+        status_code=status.HTTP_201_CREATED,
+        tags=["teams"],
+    )
+    def declare_remote_host(
+        team_id: str, payload: RemoteHostRequest, actor_id: str = Depends(_authenticated_actor)
+    ) -> dict[str, object]:
+        repository = TeamRepository(_database(app))
+        try:
+            TeamService(repository).require_team_admin(team_id, actor_id)
+        except AccessDeniedError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        host = repository.create_remote_host(
+            RemoteHost(team_id=team_id, name=payload.name, capabilities=payload.capabilities)
+        )
+        pairing_code = secrets.token_urlsafe(24)
+        app.state.host_pairing_codes[host.id] = pairing_code
+        return {**host.model_dump(mode="json"), "pairing_code": pairing_code}
+
+    @app.post("/api/v1/remote-hosts/{host_id}/pair", tags=["remote-host"])
+    def pair_remote_host(host_id: str, payload: RemoteHostPairRequest) -> dict[str, object]:
+        expected_code = app.state.host_pairing_codes.get(host_id)
+        if expected_code is None or not secrets.compare_digest(expected_code, payload.pairing_code):
+            raise HTTPException(status_code=401, detail="invalid or expired pairing code")
+        app.state.host_pairing_codes.pop(host_id, None)
+        host_token = secrets.token_urlsafe(32)
+        app.state.host_tokens[host_token] = host_id
+        try:
+            host = TeamRepository(_database(app)).set_remote_host_status(host_id, "paired")
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {**host.model_dump(mode="json"), "host_token": host_token}
+
+    @app.post("/api/v1/remote-hosts/{host_id}/heartbeat", tags=["remote-host"])
+    def remote_host_heartbeat(
+        host_id: str,
+        x_codeassist_host_token: str | None = Header(default=None),
+    ) -> dict[str, str]:
+        if app.state.host_tokens.get(x_codeassist_host_token or "") != host_id:
+            raise HTTPException(status_code=401, detail="invalid host token")
+        return {"status": "accepted", "host_id": host_id}
 
     @app.post("/api/v1/sessions/{session_id}/messages", tags=["sessions"])
     def append_session_message(session_id: str, message: ChatMessage) -> dict[str, object]:
@@ -314,6 +552,10 @@ def create_app(
 
     @app.websocket("/api/v1/sessions/{session_id}/events")
     async def session_events(websocket: WebSocket, session_id: str) -> None:
+        token = websocket.query_params.get("access_token")
+        if token not in app.state.demo_tokens:
+            await websocket.close(code=4401)
+            return
         await websocket.accept()
         session = SessionRepository(_database(app)).get(session_id)
         if session is None:

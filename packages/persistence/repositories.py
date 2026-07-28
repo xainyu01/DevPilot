@@ -15,17 +15,24 @@ from packages.contracts import (
     MemoryEntry,
     MemoryRevision,
     MemoryScope,
+    ProjectMember,
     ProjectRecord,
     ProjectRule,
+    RemoteHost,
     RepositoryProfile,
     RunContext,
     RunEvent,
     RunStatus,
     SessionRecord,
+    SessionShare,
     SessionSnapshot,
     SessionStatus,
     SessionSummary,
     StoredMessage,
+    TeamMember,
+    TeamRecord,
+    TeamRole,
+    UserRecord,
     WorkflowRun,
 )
 
@@ -37,15 +44,151 @@ from .models import (
     MemoryEntryRow,
     MemoryRevisionRow,
     MessageRow,
+    ProjectMemberRow,
     ProjectRow,
     ProjectRuleRow,
+    RemoteHostRow,
     RepositoryProfileRow,
     RunEventRow,
     SessionRow,
+    SessionShareRow,
     SessionSummaryRow,
+    TeamMemberRow,
+    TeamRow,
+    UserRow,
     WorkflowRunRow,
     utc_now,
 )
+
+
+class TeamRepository:
+    """Persist B7 memberships, explicit session shares and host declarations."""
+
+    def __init__(self, database: Database) -> None:
+        self.database = database
+
+    def create_user(self, user: UserRecord) -> UserRecord:
+        with self.database.session() as db:
+            if db.get(UserRow, user.id) is None:
+                db.add(
+                    UserRow(id=user.id, display_name=user.display_name, created_at=user.created_at)
+                )
+        return user
+
+    def create_team(self, team: TeamRecord, owner_id: str) -> TeamRecord:
+        self._require_user(owner_id)
+        with self.database.session() as db:
+            db.add(TeamRow(id=team.id, name=team.name, created_at=team.created_at))
+            db.flush()
+            db.add(TeamMemberRow(team_id=team.id, user_id=owner_id, role=TeamRole.OWNER.value))
+        return team
+
+    def set_team_member(self, member: TeamMember) -> TeamMember:
+        self._require_user(member.user_id)
+        with self.database.session() as db:
+            row = db.get(TeamMemberRow, (member.team_id, member.user_id))
+            if row is None:
+                db.add(
+                    TeamMemberRow(
+                        team_id=member.team_id, user_id=member.user_id, role=member.role.value
+                    )
+                )
+            else:
+                row.role = member.role.value
+        return member
+
+    def get_team_member(self, team_id: str, user_id: str) -> TeamMember | None:
+        with self.database.session() as db:
+            row = db.get(TeamMemberRow, (team_id, user_id))
+            return _team_member_from_row(row) if row else None
+
+    def set_project_member(self, member: ProjectMember) -> ProjectMember:
+        self._require_user(member.user_id)
+        with self.database.session() as db:
+            row = db.get(ProjectMemberRow, (member.project_id, member.user_id))
+            if row is None:
+                db.add(
+                    ProjectMemberRow(
+                        project_id=member.project_id, user_id=member.user_id, role=member.role.value
+                    )
+                )
+            else:
+                row.role = member.role.value
+        return member
+
+    def get_project_member(self, project_id: str, user_id: str) -> ProjectMember | None:
+        with self.database.session() as db:
+            row = db.get(ProjectMemberRow, (project_id, user_id))
+            return _project_member_from_row(row) if row else None
+
+    def set_session_share(self, share: SessionShare) -> SessionShare:
+        self._require_user(share.recipient_id)
+        with self.database.session() as db:
+            row = db.get(SessionShareRow, (share.session_id, share.recipient_id))
+            if row is None:
+                db.add(
+                    SessionShareRow(
+                        session_id=share.session_id,
+                        recipient_id=share.recipient_id,
+                        permission=share.permission.value,
+                    )
+                )
+            else:
+                row.permission = share.permission.value
+        return share
+
+    def get_session_share(self, session_id: str, user_id: str) -> SessionShare | None:
+        with self.database.session() as db:
+            row = db.get(SessionShareRow, (session_id, user_id))
+            return _session_share_from_row(row) if row else None
+
+    def create_remote_host(self, host: RemoteHost) -> RemoteHost:
+        with self.database.session() as db:
+            db.add(
+                RemoteHostRow(
+                    id=host.id,
+                    team_id=host.team_id,
+                    name=host.name,
+                    capabilities_json=host.capabilities,
+                    status=host.status.value,
+                    created_at=host.created_at,
+                )
+            )
+        return host
+
+    def get_remote_host(self, host_id: str) -> RemoteHost | None:
+        with self.database.session() as db:
+            row = db.get(RemoteHostRow, host_id)
+            if row is None:
+                return None
+            return RemoteHost(
+                id=row.id,
+                team_id=row.team_id,
+                name=row.name,
+                capabilities=row.capabilities_json,
+                status=row.status,
+                created_at=_as_utc(row.created_at),
+            )
+
+    def set_remote_host_status(self, host_id: str, status: str) -> RemoteHost:
+        with self.database.session() as db:
+            row = db.get(RemoteHostRow, host_id)
+            if row is None:
+                raise KeyError(f"remote host not found: {host_id}")
+            row.status = status
+            return RemoteHost(
+                id=row.id,
+                team_id=row.team_id,
+                name=row.name,
+                capabilities=row.capabilities_json,
+                status=row.status,
+                created_at=_as_utc(row.created_at),
+            )
+
+    def _require_user(self, user_id: str) -> None:
+        with self.database.session() as db:
+            if db.get(UserRow, user_id) is None:
+                raise KeyError(f"user not found: {user_id}")
 
 
 class ProjectRepository:
@@ -179,15 +322,15 @@ class SessionRepository:
                         is_error=values.get("is_error"),
                     )
                 )
-            db.execute(
-                _update_session_timestamp(session_id)
-            )
+            db.execute(_update_session_timestamp(session_id))
         return stored
 
     def list_messages(self, session_id: str, *, limit: int | None = None) -> list[StoredMessage]:
         with self.database.session() as db:
-            query = select(MessageRow).where(MessageRow.session_id == session_id).order_by(
-                MessageRow.ordinal.asc()
+            query = (
+                select(MessageRow)
+                .where(MessageRow.session_id == session_id)
+                .order_by(MessageRow.ordinal.asc())
             )
             rows = list(db.scalars(query))
             if limit is not None:
@@ -225,9 +368,7 @@ class SessionRepository:
                 row.message_count = summary.message_count
                 row.covered_through_ordinal = summary.covered_through_ordinal
                 row.created_at = summary.created_at
-            db.execute(
-                _update_session_timestamp(summary.session_id, summary=summary.summary)
-            )
+            db.execute(_update_session_timestamp(summary.session_id, summary=summary.summary))
         return summary
 
     def get_summary(self, session_id: str) -> SessionSummary | None:
@@ -429,9 +570,7 @@ class RepositoryProfileRepository:
     def get(self, project_id: str) -> RepositoryProfile | None:
         with self.database.session() as db:
             row = db.scalar(
-                select(RepositoryProfileRow).where(
-                    RepositoryProfileRow.project_id == project_id
-                )
+                select(RepositoryProfileRow).where(RepositoryProfileRow.project_id == project_id)
             )
             return RepositoryProfile.model_validate(row.profile_json) if row is not None else None
 
@@ -505,12 +644,15 @@ class RunRepository:
                 )
             else:
                 run.status = event.status.value
-            if db.scalar(
-                select(RunEventRow).where(
-                    RunEventRow.run_id == event.run_id,
-                    RunEventRow.sequence == event.sequence,
+            if (
+                db.scalar(
+                    select(RunEventRow).where(
+                        RunEventRow.run_id == event.run_id,
+                        RunEventRow.sequence == event.sequence,
+                    )
                 )
-            ) is None:
+                is None
+            ):
                 db.add(
                     RunEventRow(
                         id=event.event_id,
@@ -637,6 +779,30 @@ def _project_from_row(row: ProjectRow) -> ProjectRecord:
     )
 
 
+def _team_member_from_row(row: TeamMemberRow) -> TeamMember:
+    return TeamMember(
+        team_id=row.team_id, user_id=row.user_id, role=row.role, created_at=_as_utc(row.created_at)
+    )
+
+
+def _project_member_from_row(row: ProjectMemberRow) -> ProjectMember:
+    return ProjectMember(
+        project_id=row.project_id,
+        user_id=row.user_id,
+        role=row.role,
+        created_at=_as_utc(row.created_at),
+    )
+
+
+def _session_share_from_row(row: SessionShareRow) -> SessionShare:
+    return SessionShare(
+        session_id=row.session_id,
+        recipient_id=row.recipient_id,
+        permission=row.permission,
+        created_at=_as_utc(row.created_at),
+    )
+
+
 def _session_from_row(row: SessionRow) -> SessionRecord:
     return SessionRecord(
         id=row.id,
@@ -744,4 +910,5 @@ __all__ = [
     "RuleRepository",
     "RunRepository",
     "SessionRepository",
+    "TeamRepository",
 ]

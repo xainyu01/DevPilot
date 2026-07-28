@@ -14,6 +14,7 @@ from .repositories import (
     RuleRepository,
     RunRepository,
     SessionRepository,
+    TeamRepository,
     WorkflowRepository,
 )
 
@@ -27,6 +28,7 @@ __all__ = [
     "RuleRepository",
     "RunRepository",
     "SessionRepository",
+    "TeamRepository",
     "WorkflowRepository",
     "default_database_url",
 ]

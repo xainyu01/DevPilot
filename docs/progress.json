@@ -1,8 +1,8 @@
 {
-  "overall_percent": 100,
-  "current_batch": "B6",
-  "next_action": "进入 B7-B8 团队与发布阶段；Linux/macOS 兼容适配保留为后续 TODO",
-  "updated_at": "2026-07-28T23:50:00+08:00",
+  "overall_percent": 90,
+  "current_batch": "B8",
+  "next_action": "进入 B8：稳定化、恢复、安全、部署与发布验收",
+  "updated_at": "2026-07-29T01:40:00+08:00",
   "constraints": ["普通文档放在 docs/", "Python 依赖只由 uv 管理并提交 uv.lock", "按计划书分批实施，每批可暂停、可验证、可交接", "不默认执行高风险外部操作"],
   "batches": [
     {"id":"B0","title":"阶段 0：基础骨架与交接机制","status":"已完成（本批次）","percent":100,"scope":["Monorepo","FastAPI","CLI","契约","交接 Agent"],"completed":["建立基础分层、FastAPI、进度事实源和交接 Agent"],"in_progress":[],"next_steps":[],"blockers":[]},
@@ -12,6 +12,7 @@
     {"id":"B4","title":"阶段 4：研发工作流","status":"已完成（本批次）","percent":100,"scope":["仓库分析","证据链","Agent 执行树","测试","Worktree","PR"],"completed":["实现仓库扫描、证据链、Agent 调度、测试和 PR 文档"],"in_progress":[],"next_steps":[],"blockers":[]},
     {"id":"B5","title":"阶段 5：CLI 与 Web 工作台","status":"已完成（本批次）","percent":100,"scope":["CLI","React Web","会话事件","研发视图"],"completed":["实现 CLI、React/Vite 工作台、WebSocket 事件流和生产构建"],"in_progress":[],"next_steps":[],"blockers":[]},
     {"id":"B6","title":"阶段 6：Windows 本地 Web 与跨平台接口","status":"已完成（本批次）","percent":100,"scope":["FastAPI","Vite","Windows 本地 Web","平台端口","浏览器启动"],"completed":["修订计划书为 Windows-first 并保存原计划快照","FastAPI 托管 Vite dist、静态资源和 SPA 回退","CLI serve 支持浏览器启动、端口预检和明确启动错误","项目登记执行路径规范化、存在性与目录校验","提供 runtime logs API 并记录服务、项目和会话事件","Web 工作台支持登记项目、创建会话和 WebSocket 首次对话","新增平台端口接口：PathResolver、ProcessRunner、ShellRunner、BrowserLauncher、PlatformAdapter","Linux/macOS 兼容策略、能力声明和 TODO 清单写入架构文档","删除未完成的 Tauri、Rust、Sidecar 和桌面打包依赖","Windows 本地服务冒烟、完整测试 43 passed、Ruff、Vite build 和 doctor 通过"],"in_progress":[],"next_steps":["进入 B7-B8 团队与发布阶段","后续独立实现 Linux/macOS 适配器并运行平台冒烟"],"blockers":[]},
-    {"id":"B7-B8","title":"阶段 7-8：团队与发布","status":"未开始","percent":0,"scope":["团队共享","稳定化发布"],"completed":[],"in_progress":[],"next_steps":["完成团队共享、RBAC、远程 Host 和发布验收"],"blockers":[]}
+    {"id":"B7","title":"阶段 7：团队与共享","status":"已完成（本批次）","percent":100,"scope":["团队共享","RBAC","远程 Host"],"completed":["新增用户、团队、团队/项目成员和会话共享契约及数据库表","新增团队管理员角色校验与 view/collaborate 会话共享授权","Demo 固定 admin/admin 登录、进程内 Bearer token 和 Web 登录界面，不读取或修改系统环境变量","所有 HTTP 业务 API 统一验证 Bearer token，会话 WebSocket 验证 access_token","远程 Host 完成管理员登记、一次性配对码、Host token 和心跳链路；Host token 不授予工具执行权限"],"in_progress":[],"next_steps":[],"blockers":[]},
+    {"id":"B8","title":"阶段 8：稳定化与发布","status":"未开始","percent":0,"scope":["稳定化","发布"],"completed":[],"in_progress":[],"next_steps":["在 B7 验收后执行性能、恢复、安全、部署和发布验收"],"blockers":[]}
   ]
 }

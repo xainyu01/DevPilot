@@ -1,2 +1,4 @@
 .compact-form { display: grid; gap: 6px; margin: 0 0 16px; }
 input { width: 100%; padding: 8px; color: inherit; background: #101d31; border: 1px solid #38506f; border-radius: 6px; }
+.login-page { display: grid; min-height: 100vh; place-items: center; }
+.login-card { width: min(360px, 90vw); padding: 28px; background: #16243a; border: 1px solid #38506f; border-radius: 10px; }

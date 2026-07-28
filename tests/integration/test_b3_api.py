@@ -7,6 +7,13 @@ from fastapi.testclient import TestClient
 from apps.api.main import create_app
 
 
+def authenticate(client: TestClient) -> None:
+    token = client.post(
+        "/api/v1/auth/login", json={"username": "admin", "password": "admin"}
+    ).json()["access_token"]
+    client.headers.update({"Authorization": f"Bearer {token}"})
+
+
 def test_b3_api_persists_session_and_discovers_rules_after_app_restart(tmp_path: Path) -> None:
     database_path = tmp_path / "codeassist.db"
     database_url = f"sqlite:///{database_path.as_posix()}"
@@ -16,6 +23,7 @@ def test_b3_api_persists_session_and_discovers_rules_after_app_restart(tmp_path:
 
     first_app = create_app(database_url=database_url, workspace_root=tmp_path)
     with TestClient(first_app) as client:
+        authenticate(client)
         project = client.post(
             "/api/v1/projects",
             json={"name": "test-project", "root_path": str(project_root)},
@@ -36,6 +44,7 @@ def test_b3_api_persists_session_and_discovers_rules_after_app_restart(tmp_path:
 
     restarted_app = create_app(database_url=database_url, workspace_root=tmp_path)
     with TestClient(restarted_app) as client:
+        authenticate(client)
         snapshot = client.get(f"/api/v1/sessions/{session_id}")
         assert snapshot.status_code == 200
         assert snapshot.json()["messages"][0]["message"]["content"][0]["text"] == "hello"

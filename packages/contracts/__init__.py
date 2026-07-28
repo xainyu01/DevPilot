@@ -43,6 +43,17 @@ from .data import (
     StoredMessage,
 )
 from .progress import BatchProgress, ProgressSnapshot
+from .team import (
+    HostStatus,
+    ProjectMember,
+    RemoteHost,
+    SessionPermission,
+    SessionShare,
+    TeamMember,
+    TeamRecord,
+    TeamRole,
+    UserRecord,
+)
 from .tools import (
     ApprovalDecision,
     ApprovalRequest,
@@ -146,6 +157,15 @@ __all__ = [
     "SessionStatus",
     "SessionSummary",
     "StoredMessage",
+    "HostStatus",
+    "ProjectMember",
+    "RemoteHost",
+    "SessionPermission",
+    "SessionShare",
+    "TeamMember",
+    "TeamRecord",
+    "TeamRole",
+    "UserRecord",
     "TextBlock",
     "TokenUsage",
     "ToolCall",

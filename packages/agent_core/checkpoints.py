@@ -57,4 +57,3 @@ class CheckpointStore:
     def clear(self, thread_id: str, run_id: str) -> None:
         with self._lock:
             self._items.pop((thread_id, run_id), None)
-

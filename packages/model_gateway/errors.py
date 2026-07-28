@@ -19,4 +19,3 @@ class UnsupportedCapabilityError(ModelAdapterError):
     def __init__(self, error: CapabilityError) -> None:
         self.error = error
         super().__init__(error.message)
-

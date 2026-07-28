@@ -5,6 +5,13 @@ from fastapi.testclient import TestClient
 from apps.api.main import app, create_app
 
 
+def authenticate(client: TestClient) -> str:
+    response = client.post("/api/v1/auth/login", json={"username": "admin", "password": "admin"})
+    token = response.json()["access_token"]
+    client.headers.update({"Authorization": f"Bearer {token}"})
+    return token
+
+
 def test_health_endpoint() -> None:
     response = TestClient(app).get("/healthz")
 
@@ -48,6 +55,7 @@ def test_local_web_first_conversation_and_runtime_logs(tmp_path: Path) -> None:
     )
 
     with TestClient(web_app) as client:
+        authenticate(client)
         project = client.post(
             "/api/v1/projects",
             json={"name": "first-project", "root_path": "."},
@@ -85,10 +93,13 @@ def test_websocket_first_conversation_streams_terminal_event(tmp_path: Path) -> 
     )
 
     with TestClient(web_app) as client:
+        token = authenticate(client)
         session = client.post(
             "/api/v1/sessions", json={"thread_id": "websocket-thread", "title": "Web chat"}
         ).json()
-        with client.websocket_connect(f"/api/v1/sessions/{session['id']}/events") as websocket:
+        with client.websocket_connect(
+            f"/api/v1/sessions/{session['id']}/events?access_token={token}"
+        ) as websocket:
             websocket.send_json(
                 {
                     "message": {
@@ -114,6 +125,7 @@ def test_project_registration_rejects_missing_or_file_path(tmp_path: Path) -> No
     file_path.write_text("file", encoding="utf-8")
 
     with TestClient(web_app) as client:
+        authenticate(client)
         missing = client.post(
             "/api/v1/projects",
             json={"name": "missing", "root_path": str(tmp_path / "missing")},
@@ -130,7 +142,9 @@ def test_project_registration_rejects_missing_or_file_path(tmp_path: Path) -> No
 
 
 def test_tools_endpoint_exposes_policy_gated_definitions() -> None:
-    response = TestClient(app).get("/api/v1/tools")
+    with TestClient(app) as client:
+        authenticate(client)
+        response = client.get("/api/v1/tools")
 
     assert response.status_code == 200
     tools = {item["name"]: item for item in response.json()}
