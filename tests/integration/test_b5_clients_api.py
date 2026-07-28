@@ -36,3 +36,33 @@ def test_b5_session_run_preserves_message_and_event_order(tmp_path) -> None:
         snapshot = client.get(f"/api/v1/sessions/{session['id']}").json()
         assert [item["message"]["role"] for item in snapshot["messages"]] == ["user", "assistant"]
         assert snapshot["messages"][1]["message"]["content"][0]["text"].startswith("Fake response")
+
+
+def test_project_directory_picker_is_limited_to_workspace(tmp_path) -> None:
+    selectable = tmp_path / "selectable"
+    selectable.mkdir()
+    (selectable / "nested").mkdir()
+    (tmp_path / ".hidden").mkdir()
+    outside = tmp_path.parent / f"{tmp_path.name}-outside-project"
+    outside.mkdir()
+    app = create_app(
+        database_url=f"sqlite:///{(tmp_path / 'directory-picker.db').as_posix()}",
+        workspace_root=tmp_path,
+    )
+
+    with TestClient(app) as client:
+        authenticate(client)
+        root_listing = client.get("/api/v1/project-directories")
+        assert root_listing.status_code == 200
+        assert {item["name"] for item in root_listing.json()["directories"]} >= {"selectable"}
+        assert ".hidden" not in {item["name"] for item in root_listing.json()["directories"]}
+
+        nested_listing = client.get("/api/v1/project-directories", params={"path": selectable})
+        assert nested_listing.status_code == 200
+        assert nested_listing.json()["parent_path"] == str(tmp_path.resolve())
+        assert nested_listing.json()["directories"] == [
+            {"name": "nested", "path": str((selectable / "nested").resolve())}
+        ]
+
+        outside_listing = client.get("/api/v1/project-directories", params={"path": outside})
+        assert outside_listing.status_code == 422

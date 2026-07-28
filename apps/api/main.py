@@ -496,6 +496,17 @@ def create_app(
         ]
         return [project.model_dump(mode="json") for project in projects]
 
+    @app.get("/api/v1/project-directories", tags=["project"])
+    def list_project_directories(
+        path: str | None = Query(default=None), actor_id: str = Depends(_authenticated_actor)
+    ) -> dict[str, object]:
+        """List selectable directories without exposing paths outside the workspace."""
+        del actor_id
+        try:
+            return _workspace_directory_listing(path, workspace)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     @app.post("/api/v1/users", status_code=status.HTTP_201_CREATED, tags=["teams"])
     def create_user(
         payload: UserCreateRequest, actor_id: str = Depends(_authenticated_actor)
@@ -1117,6 +1128,46 @@ def _normalize_project_root(raw_path: str, *, base_dir: Path) -> Path:
     if not resolved.is_dir():
         raise ValueError(f"project root must be an existing directory: {resolved}")
     return resolved
+
+
+def _workspace_directory_listing(raw_path: str | None, workspace: Path) -> dict[str, object]:
+    """Return direct child directories only when the requested path stays in the workspace."""
+    root = workspace.resolve()
+    candidate = root if raw_path is None else Path(raw_path).expanduser()
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    try:
+        resolved = candidate.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise ValueError("selected directory is not accessible") from exc
+    if not resolved.is_dir():
+        raise ValueError("selected path must be a directory")
+    if not resolved.is_relative_to(root):
+        raise ValueError("selected directory must be inside the workspace")
+
+    directories: list[dict[str, str]] = []
+    try:
+        children = sorted(resolved.iterdir(), key=lambda child: child.name.casefold())
+    except OSError as exc:
+        raise ValueError("selected directory cannot be listed") from exc
+    for child in children:
+        if child.name.startswith("."):
+            continue
+        try:
+            child_path = child.resolve(strict=True)
+        except (OSError, RuntimeError):
+            continue
+        if child_path.is_dir() and child_path.is_relative_to(root):
+            directories.append({"name": child.name, "path": str(child_path)})
+        if len(directories) == 100:
+            break
+
+    parent = resolved.parent if resolved.parent.is_relative_to(root) else None
+    return {
+        "path": str(resolved),
+        "parent_path": str(parent) if parent is not None and parent != resolved else None,
+        "directories": directories,
+    }
 
 
 def _require_project_access(
