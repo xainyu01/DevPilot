@@ -36,12 +36,13 @@ class Database:
         engine_kwargs: dict[str, object] = {
             "future": True,
             "connect_args": connect_args,
+            "pool_pre_ping": not self.url.startswith("sqlite"),
         }
         if self.url in {"sqlite://", "sqlite:///:memory:"}:
             engine_kwargs["poolclass"] = StaticPool
         self.engine: Engine = create_engine(self.url, **engine_kwargs)
         if self.url.startswith("sqlite"):
-            event.listen(self.engine, "connect", _enable_sqlite_foreign_keys)
+            event.listen(self.engine, "connect", _configure_sqlite_connection)
 
     def create_all(self) -> None:
         Base.metadata.create_all(self.engine)
@@ -62,9 +63,12 @@ class Database:
             session.close()
 
 
-def _enable_sqlite_foreign_keys(dbapi_connection: object, _: object) -> None:
+def _configure_sqlite_connection(dbapi_connection: object, _: object) -> None:
+    """Enable durable, contention-tolerant SQLite defaults for local deployments."""
     cursor = dbapi_connection.cursor()
     try:
         cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA busy_timeout=5000")
+        cursor.execute("PRAGMA journal_mode=WAL")
     finally:
         cursor.close()

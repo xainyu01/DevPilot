@@ -24,3 +24,8 @@
 3. [NEXT_STEPS.md](NEXT_STEPS.md)
 4. 当前批次的架构说明与 ADR
 5. 最新的 `handovers/HANDOVER-*.md`
+
+## 发布候选
+
+- [B8 稳定化与发布设计](architecture/BATCH-08-STABILIZATION-RELEASE.md)
+- [部署、升级与回滚指南](RELEASE.md)

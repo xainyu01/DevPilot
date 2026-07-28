@@ -47,6 +47,7 @@ from .models import (
     ProjectMemberRow,
     ProjectRow,
     ProjectRuleRow,
+    RemoteHostPairingRow,
     RemoteHostRow,
     RepositoryProfileRow,
     RunEventRow,
@@ -202,6 +203,40 @@ class TeamRepository:
                 status=row.status,
                 created_at=_as_utc(row.created_at),
             )
+
+    def save_remote_host_pairing(
+        self, *, host_id: str, code_hash: str, expires_at: datetime
+    ) -> None:
+        """Replace a host's pending one-time pairing code without retaining it in plaintext."""
+        with self.database.session() as db:
+            if db.get(RemoteHostRow, host_id) is None:
+                raise KeyError(f"remote host not found: {host_id}")
+            row = db.get(RemoteHostPairingRow, host_id)
+            if row is None:
+                db.add(
+                    RemoteHostPairingRow(
+                        host_id=host_id,
+                        code_hash=code_hash,
+                        expires_at=expires_at,
+                    )
+                )
+            else:
+                row.code_hash = code_hash
+                row.expires_at = expires_at
+
+    def consume_remote_host_pairing(
+        self, *, host_id: str, code_hash: str, now: datetime
+    ) -> bool:
+        """Atomically consume a non-expired pairing digest when it matches."""
+        with self.database.session() as db:
+            row = db.get(RemoteHostPairingRow, host_id)
+            if row is None:
+                return False
+            expires_at = _as_utc(row.expires_at)
+            if expires_at <= _as_utc(now) or row.code_hash != code_hash:
+                return False
+            db.delete(row)
+            return True
 
     def _require_user(self, user_id: str) -> None:
         with self.database.session() as db:

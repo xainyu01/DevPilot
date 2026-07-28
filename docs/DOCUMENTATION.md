@@ -6,6 +6,7 @@
 docs/
 ├── README.md                         # 文档入口
 ├── GETTING_STARTED.md                # 初始化与首次运行
+├── RELEASE.md                        # 发布、升级、回滚与恢复指南
 ├── NEXT_STEPS.md                     # 下一批实施顺序与恢复流程
 ├── DOCUMENTATION.md                  # 本规范
 ├── PROGRESS.md                       # 进度的人类可读视图

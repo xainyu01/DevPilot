@@ -1,6 +1,7 @@
 """CodeAssist CLI for local development and handover operations."""
 
 import json
+import os
 import socket
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -11,13 +12,18 @@ from rich.console import Console
 from rich.table import Table
 
 from packages.handover_agent import HandoverAgent
+from packages.persistence import backup_sqlite_database, default_database_url
 
 app = typer.Typer(help="CodeAssist 2.0 command line interface.")
+auth_app = typer.Typer(help="Obtain a short-lived JWT for authenticated API commands.")
+database_app = typer.Typer(help="Create safe local database recovery snapshots.")
 handover_app = typer.Typer(help="Generate and inspect pause/resume handover documents.")
 project_app = typer.Typer(help="Manage projects through the local API.")
 session_app = typer.Typer(help="Manage sessions and send messages through the local API.")
 workflow_app = typer.Typer(help="Inspect and start development workflows through the local API.")
 app.add_typer(handover_app, name="handover")
+app.add_typer(auth_app, name="auth")
+app.add_typer(database_app, name="database")
 app.add_typer(project_app, name="project")
 app.add_typer(session_app, name="session")
 app.add_typer(workflow_app, name="workflow")
@@ -128,6 +134,26 @@ def doctor() -> None:
         raise typer.Exit(code=1)
 
 
+@database_app.command("backup")
+def backup_database(
+    destination: Path = typer.Argument(..., help="New SQLite snapshot path; must not exist."),
+    database_url: str | None = typer.Option(
+        None,
+        help="Optional sqlite:/// URL; defaults to CODEASSIST_DATABASE_URL or the local database.",
+    ),
+) -> None:
+    """Write a non-destructive consistent snapshot of a file-backed SQLite database."""
+    root = Path(__file__).resolve().parents[2]
+    effective_url = database_url or os.environ.get("CODEASSIST_DATABASE_URL")
+    try:
+        target = backup_sqlite_database(
+            effective_url or default_database_url(root), destination
+        )
+    except (FileExistsError, FileNotFoundError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(f"SQLite backup written to: {target}")
+
+
 def _api_request(
     method: str,
     path: str,
@@ -136,11 +162,15 @@ def _api_request(
     api_url: str,
 ) -> object:
     body = json.dumps(payload).encode("utf-8") if payload is not None else None
+    headers = {"Content-Type": "application/json"} if body is not None else {}
+    access_token = os.environ.get("CODEASSIST_ACCESS_TOKEN")
+    if access_token:
+        headers["Authorization"] = f"Bearer {access_token}"
     request = Request(
         f"{api_url.rstrip('/')}{path}",
         data=body,
         method=method,
-        headers={"Content-Type": "application/json"} if body is not None else {},
+        headers=headers,
     )
     try:
         with urlopen(request, timeout=30) as response:  # noqa: S310 - user-selected local endpoint
@@ -154,6 +184,23 @@ def _api_request(
 
 def _print_json(value: object) -> None:
     console.print_json(json.dumps(value, ensure_ascii=False, default=str))
+
+
+@auth_app.command("login")
+def login(
+    username: str = typer.Argument(..., help="One of the configured CodeAssist user IDs."),
+    password: str = typer.Option(..., prompt=True, hide_input=True, help="Account password."),
+    api_url: str = typer.Option("http://127.0.0.1:8000"),
+) -> None:
+    """Print a signed JWT for use as ``CODEASSIST_ACCESS_TOKEN`` in this shell."""
+    _print_json(
+        _api_request(
+            "POST",
+            "/api/v1/auth/login",
+            payload={"username": username, "password": password},
+            api_url=api_url,
+        )
+    )
 
 
 @project_app.command("list")

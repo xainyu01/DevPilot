@@ -111,6 +111,19 @@ class RemoteHostRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class RemoteHostPairingRow(Base):
+    """One-time remote-host pairing secrets, stored only as SHA-256 digests."""
+
+    __tablename__ = "remote_host_pairings"
+
+    host_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("remote_hosts.id", ondelete="CASCADE"), primary_key=True
+    )
+    code_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class SessionRow(TimestampMixin, Base):
     __tablename__ = "conversation_sessions"
 
@@ -351,5 +364,6 @@ __all__ = [
     "ProjectMemberRow",
     "SessionShareRow",
     "RemoteHostRow",
+    "RemoteHostPairingRow",
     "utc_now",
 ]

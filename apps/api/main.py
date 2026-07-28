@@ -1,9 +1,10 @@
 """FastAPI entry point for the B4 persistence and development workflow boundary."""
 
 import base64
+import hashlib
 import os
 import secrets
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -13,12 +14,15 @@ from fastapi import (
     Header,
     HTTPException,
     Query,
+    Request,
     Response,
     WebSocket,
     WebSocketDisconnect,
     status,
 )
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from starlette.responses import FileResponse
 from starlette.staticfiles import StaticFiles
 
@@ -28,6 +32,7 @@ from packages.contracts import (
     IssueContext,
     MemoryScope,
     ProjectMember,
+    ProjectRecord,
     RemoteHost,
     ReviewStatus,
     RunRequest,
@@ -56,6 +61,7 @@ from packages.persistence import (
 )
 from packages.project_context import ProjectContextService
 from packages.repo_intel import RepositoryScanner
+from packages.security import AuthenticationService, AuthSettings, LoginRateLimiter
 from packages.team import AccessDeniedError, TeamService
 from packages.tool_runtime import ToolRuntime
 
@@ -83,7 +89,7 @@ class MemoryCreateRequest(BaseModel):
     content: str = Field(min_length=1)
     source: str = "user"
     scope: MemoryScope = MemoryScope.USER
-    owner_id: str = "local-user"
+    owner_id: str | None = None
 
 
 class MemoryUpdateRequest(BaseModel):
@@ -177,7 +183,7 @@ class RemoteHostPairRequest(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    """Demo-only fixed administrator login; replace in B8 before deployment."""
+    """Fixed B7 account login backed by a signed JWT session."""
 
     model_config = ConfigDict(extra="forbid")
     username: str
@@ -189,27 +195,29 @@ def create_app(
     database_url: str | None = None,
     workspace_root: Path | None = None,
     web_dist_path: Path | None = None,
+    auth_settings: AuthSettings | None = None,
 ) -> FastAPI:
     workspace = (workspace_root or project_root()).expanduser().resolve()
     configured_url = database_url or os.environ.get("CODEASSIST_DATABASE_URL")
     database = Database(configured_url or default_database_url(workspace))
+    resolved_auth_settings = auth_settings or AuthSettings.from_environment()
+    authentication = AuthenticationService(resolved_auth_settings)
     app = FastAPI(
         title="CodeAssist 2.0 API",
-        version="0.1.0",
+        version="0.1.0rc1",
         description="Local-first Agent service boundary for the LangGraph core.",
     )
     app.state.database = database
     app.state.workspace_root = workspace
     app.state.agent_runtime = AgentRuntime(ModelGateway([FakeModel()]))
     app.state.runtime_logs: list[dict[str, object]] = []
-    app.state.demo_tokens: dict[str, str] = {}
-    app.state.host_pairing_codes: dict[str, str] = {}
-    app.state.host_tokens: dict[str, str] = {}
-    _database(app)
-    account_names = ("admin", "admin1", "admin2", "admin3")
-    for account_name in account_names:
+    app.state.authentication = authentication
+    app.state.auth_settings = resolved_auth_settings
+    app.state.login_rate_limiter = LoginRateLimiter()
+    database.create_all()
+    for user in authentication.users:
         TeamRepository(database).create_user(
-            UserRecord(id=account_name, display_name=account_name)
+            UserRecord(id=user.user_id, display_name=user.display_name)
         )
     _record_runtime_log(
         app,
@@ -222,10 +230,10 @@ def create_app(
     )
 
     def _actor_for_token(token: str | None) -> str | None:
-        return app.state.demo_tokens.get(token or "")
+        return authentication.authenticate_access_token(token)
 
     def _authenticated_actor(authorization: str | None = Header(default=None)) -> str:
-        """Authenticate the demo bearer token without exposing an actor-id request field."""
+        """Authenticate a signed bearer token without exposing an actor-id request field."""
         if authorization is None or not authorization.startswith("Bearer "):
             raise HTTPException(status_code=401, detail="bearer token is required")
         token = authorization.removeprefix("Bearer ")
@@ -235,8 +243,8 @@ def create_app(
         return actor_id
 
     @app.middleware("http")
-    async def require_demo_auth(request, call_next):
-        """Protect every HTTP API except service metadata and the demo login exchange."""
+    async def enforce_api_security(request: Request, call_next):
+        """Protect the API and add browser-safe headers at one release boundary."""
         public_paths = {"/healthz", "/api/v1/meta", "/api/v1/auth/login", "/api/v1/progress"}
         host_path = request.url.path.startswith("/api/v1/remote-hosts/")
         if (
@@ -246,21 +254,35 @@ def create_app(
         ):
             authorization = request.headers.get("authorization")
             if authorization is None or not authorization.startswith("Bearer "):
-                return Response(status_code=401, content="bearer token is required")
+                return _apply_security_headers(
+                    Response(status_code=401, content="bearer token is required")
+                )
             if _actor_for_token(authorization.removeprefix("Bearer ")) is None:
-                return Response(status_code=401, content="invalid or expired bearer token")
-        return await call_next(request)
+                return _apply_security_headers(
+                    Response(status_code=401, content="invalid or expired bearer token")
+                )
+        return _apply_security_headers(await call_next(request))
 
     @app.get("/healthz", tags=["system"])
     def healthz() -> dict[str, str]:
         return {"status": "ok", "service": "codeassist-api"}
 
+    @app.get("/readyz", tags=["system"])
+    def readyz() -> dict[str, str]:
+        """Readiness probe that confirms the configured database is reachable."""
+        try:
+            with database.engine.connect() as connection:
+                connection.execute(text("SELECT 1"))
+        except SQLAlchemyError as exc:
+            raise HTTPException(status_code=503, detail="database is unavailable") from exc
+        return {"status": "ready", "service": "codeassist-api"}
+
     @app.get("/api/v1/meta", tags=["system"])
     def meta() -> dict[str, object]:
         return {
             "name": "codeassist-next",
-            "version": "0.1.0",
-            "stage": 6,
+            "version": "0.1.0rc1",
+            "stage": 8,
             "dependency_manager": "uv",
             "features": {
                 "agent_core": "available",
@@ -286,20 +308,41 @@ def create_app(
                 "desktop_shell": "deferred_optional",
                 "project_registration": "available_with_path_validation",
                 "runtime_logs": "available",
-                "demo_auth": "available_with_fixed_admin_credentials",
-                "team_rbac": "available_for_authenticated_admin",
+                "authentication": "available_with_fixed_b7_accounts_and_signed_jwt",
+                "team_rbac": "available_with_resource_authorization",
                 "session_sharing": "available_with_explicit_permission",
-                "remote_agent_host": "declared_not_connected",
+                "remote_agent_host": "available_with_persistent_pairing",
+                "release_readiness": "available",
             },
         }
 
     @app.get("/api/v1/runtime/logs", tags=["system"])
     def runtime_logs(limit: int = Query(default=100, ge=1, le=200)) -> list[dict[str, object]]:
         """Return recent local service events for the Web diagnostics panel."""
-        return list(app.state.runtime_logs[-limit:])
+        logs = list(app.state.runtime_logs[-limit:])
+        if resolved_auth_settings.environment == "development":
+            return logs
+        return [{key: value for key, value in item.items() if key != "data"} for item in logs]
 
     @app.post("/api/v1/auth/login", tags=["auth"])
-    def login(payload: LoginRequest) -> dict[str, str]:
+    def login(payload: LoginRequest, request: Request) -> dict[str, str]:
+        client_key = request.client.host if request.client is not None else "unknown"
+        retry_after = app.state.login_rate_limiter.retry_after(client_key)
+        if retry_after is not None:
+            raise HTTPException(
+                status_code=429,
+                detail="too many failed login attempts",
+                headers={"Retry-After": str(retry_after)},
+            )
+        user = authentication.authenticate_password(payload.username, payload.password)
+        if user is None:
+            app.state.login_rate_limiter.record_failure(client_key)
+            raise HTTPException(status_code=401, detail="invalid username or password")
+        app.state.login_rate_limiter.clear(client_key)
+        token = authentication.issue_access_token(user.user_id)
+        return {"access_token": token, "token_type": "bearer", "user_id": user.user_id}
+
+        """
         # TODO（后续 B8）：固定测试账号仅用于多人验收；预期改为可配置凭据与正式认证。
         if payload.username not in account_names or not secrets.compare_digest(
             payload.password, payload.username
@@ -308,6 +351,7 @@ def create_app(
         token = secrets.token_urlsafe(32)
         app.state.demo_tokens[token] = payload.username
         return {"access_token": token, "token_type": "bearer", "user_id": payload.username}
+        """
 
     @app.get("/api/v1/progress", tags=["project"])
     def progress() -> dict[str, object]:
@@ -330,7 +374,11 @@ def create_app(
             root_path = _normalize_project_root(payload.root_path, base_dir=workspace)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        project = repository.get_or_create(name=payload.name, root_path=str(root_path))
+        existing = repository.get_by_root(str(root_path))
+        if existing is not None:
+            _require_project_access(app, existing.id, actor_id, write=False)
+            return existing.model_dump(mode="json")
+        project = repository.create(ProjectRecord(name=payload.name, root_path=str(root_path)))
         TeamRepository(db).set_project_member(
             ProjectMember(project_id=project.id, user_id=actor_id, role=TeamRole.OWNER)
         )
@@ -355,6 +403,8 @@ def create_app(
     def create_user(
         payload: UserCreateRequest, actor_id: str = Depends(_authenticated_actor)
     ) -> dict[str, object]:
+        if not resolved_auth_settings.allow_user_provisioning:
+            raise HTTPException(status_code=403, detail="user provisioning is disabled")
         user = UserRecord(id=payload.id or str(uuid4()), display_name=payload.display_name)
         return TeamRepository(_database(app)).create_user(user).model_dump(mode="json")
 
@@ -408,6 +458,8 @@ def create_app(
     def create_session(
         payload: SessionCreateRequest, actor_id: str = Depends(_authenticated_actor)
     ) -> dict[str, object]:
+        if payload.project_id is not None:
+            _require_project_access(app, payload.project_id, actor_id, write=False)
         session = SessionRepository(_database(app)).create(
             SessionRecord(
                 thread_id=payload.thread_id,
@@ -426,6 +478,8 @@ def create_app(
     ) -> list[dict[str, object]]:
         if user_id is not None and user_id != actor_id:
             raise HTTPException(status_code=403, detail="cannot list another user's sessions")
+        if project_id is not None:
+            _require_project_access(app, project_id, actor_id, write=False)
         database = _database(app)
         shared_ids = TeamRepository(database).list_shared_session_ids(actor_id)
         sessions = [
@@ -484,22 +538,33 @@ def create_app(
         host = repository.create_remote_host(
             RemoteHost(team_id=team_id, name=payload.name, capabilities=payload.capabilities)
         )
-        pairing_code = secrets.token_urlsafe(24)
-        app.state.host_pairing_codes[host.id] = pairing_code
-        return {**host.model_dump(mode="json"), "pairing_code": pairing_code}
+        pairing_code = secrets.token_urlsafe(32)
+        pairing_expires_at = datetime.now(UTC) + timedelta(minutes=10)
+        repository.save_remote_host_pairing(
+            host_id=host.id,
+            code_hash=_secret_digest(pairing_code),
+            expires_at=pairing_expires_at,
+        )
+        return {
+            **host.model_dump(mode="json"),
+            "pairing_code": pairing_code,
+            "pairing_expires_at": pairing_expires_at.isoformat(),
+        }
 
     @app.post("/api/v1/remote-hosts/{host_id}/pair", tags=["remote-host"])
     def pair_remote_host(host_id: str, payload: RemoteHostPairRequest) -> dict[str, object]:
-        expected_code = app.state.host_pairing_codes.get(host_id)
-        if expected_code is None or not secrets.compare_digest(expected_code, payload.pairing_code):
+        repository = TeamRepository(_database(app))
+        if not repository.consume_remote_host_pairing(
+            host_id=host_id,
+            code_hash=_secret_digest(payload.pairing_code),
+            now=datetime.now(UTC),
+        ):
             raise HTTPException(status_code=401, detail="invalid or expired pairing code")
-        app.state.host_pairing_codes.pop(host_id, None)
-        host_token = secrets.token_urlsafe(32)
-        app.state.host_tokens[host_token] = host_id
         try:
-            host = TeamRepository(_database(app)).set_remote_host_status(host_id, "paired")
+            host = repository.set_remote_host_status(host_id, "paired")
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        host_token = authentication.issue_host_token(host_id)
         return {**host.model_dump(mode="json"), "host_token": host_token}
 
     @app.post("/api/v1/remote-hosts/{host_id}/heartbeat", tags=["remote-host"])
@@ -507,7 +572,7 @@ def create_app(
         host_id: str,
         x_codeassist_host_token: str | None = Header(default=None),
     ) -> dict[str, str]:
-        if app.state.host_tokens.get(x_codeassist_host_token or "") != host_id:
+        if not authentication.authenticate_host_token(x_codeassist_host_token, host_id):
             raise HTTPException(status_code=401, detail="invalid host token")
         return {"status": "accepted", "host_id": host_id}
 
@@ -543,12 +608,17 @@ def create_app(
                 status_code=422,
                 detail="attachment filename must not include a path",
             )
+        encoded_limit = (resolved_auth_settings.max_attachment_bytes * 4 // 3) + 8
+        if len(payload.content_base64) > encoded_limit:
+            raise HTTPException(status_code=413, detail="attachment exceeds configured size limit")
         try:
             content = base64.b64decode(payload.content_base64, validate=True)
         except ValueError as exc:
             raise HTTPException(
                 status_code=422, detail="attachment content must be base64"
             ) from exc
+        if len(content) > resolved_auth_settings.max_attachment_bytes:
+            raise HTTPException(status_code=413, detail="attachment exceeds configured size limit")
         attachment_id = str(uuid4())
         directory = workspace / ".codeassist" / "attachments" / session_id
         directory.mkdir(parents=True, exist_ok=True)
@@ -665,7 +735,10 @@ def create_app(
         return summary.model_dump(mode="json")
 
     @app.get("/api/v1/projects/{project_id}/rules", tags=["project"])
-    def list_project_rules(project_id: str) -> list[dict[str, object]]:
+    def list_project_rules(
+        project_id: str, actor_id: str = Depends(_authenticated_actor)
+    ) -> list[dict[str, object]]:
+        _require_project_access(app, project_id, actor_id, write=False)
         rules = RuleRepository(_database(app)).list(project_id)
         return [rule.model_dump(mode="json") for rule in rules]
 
@@ -673,10 +746,9 @@ def create_app(
     def discover_project_rules(
         project_id: str,
         payload: RuleDiscoveryRequest | None = None,
+        actor_id: str = Depends(_authenticated_actor),
     ) -> dict[str, object]:
-        project = ProjectRepository(_database(app)).get(project_id)
-        if project is None:
-            raise HTTPException(status_code=404, detail=f"project not found: {project_id}")
+        project = _require_project_access(app, project_id, actor_id, write=True)
         current_dir = Path(payload.current_dir) if payload and payload.current_dir else None
         context = ProjectContextService().discover_and_store(
             project_id=project_id,
@@ -687,11 +759,11 @@ def create_app(
         return {**context.model_dump(mode="json"), "merged_text": context.merged_text}
 
     @app.post("/api/v1/projects/{project_id}/repository/scan", tags=["workflows"])
-    def scan_repository(project_id: str) -> dict[str, object]:
+    def scan_repository(
+        project_id: str, actor_id: str = Depends(_authenticated_actor)
+    ) -> dict[str, object]:
         database = _database(app)
-        project = ProjectRepository(database).get(project_id)
-        if project is None:
-            raise HTTPException(status_code=404, detail=f"project not found: {project_id}")
+        project = _require_project_access(app, project_id, actor_id, write=True)
         try:
             profile = RepositoryScanner(Path(project.root_path)).scan(project_id=project_id)
         except (NotADirectoryError, OSError, ValueError) as exc:
@@ -700,18 +772,21 @@ def create_app(
         return profile.model_dump(mode="json")
 
     @app.get("/api/v1/projects/{project_id}/repository-profile", tags=["workflows"])
-    def get_repository_profile(project_id: str) -> dict[str, object]:
+    def get_repository_profile(
+        project_id: str, actor_id: str = Depends(_authenticated_actor)
+    ) -> dict[str, object]:
+        _require_project_access(app, project_id, actor_id, write=False)
         profile = RepositoryProfileRepository(_database(app)).get(project_id)
         if profile is None:
             raise HTTPException(status_code=404, detail="repository profile not found")
         return profile.model_dump(mode="json")
 
     @app.post("/api/v1/workflows", status_code=status.HTTP_201_CREATED, tags=["workflows"])
-    def create_workflow(payload: WorkflowCreateRequest) -> dict[str, object]:
+    def create_workflow(
+        payload: WorkflowCreateRequest, actor_id: str = Depends(_authenticated_actor)
+    ) -> dict[str, object]:
         database = _database(app)
-        project = ProjectRepository(database).get(payload.project_id)
-        if project is None:
-            raise HTTPException(status_code=404, detail=f"project not found: {payload.project_id}")
+        project = _require_project_access(app, payload.project_id, actor_id, write=True)
         workflow = DevelopmentWorkflowService(
             project_id=project.id,
             project_root=Path(project.root_path),
@@ -731,22 +806,38 @@ def create_app(
         return workflow.model_dump(mode="json")
 
     @app.get("/api/v1/workflows", tags=["workflows"])
-    def list_workflows(project_id: str | None = Query(default=None)) -> list[dict[str, object]]:
-        workflows = WorkflowRepository(_database(app)).list(project_id=project_id)
+    def list_workflows(
+        project_id: str | None = Query(default=None),
+        actor_id: str = Depends(_authenticated_actor),
+    ) -> list[dict[str, object]]:
+        if project_id is not None:
+            _require_project_access(app, project_id, actor_id, write=False)
+        allowed_projects = TeamRepository(_database(app)).list_project_ids_for_user(actor_id)
+        workflows = [
+            workflow
+            for workflow in WorkflowRepository(_database(app)).list(project_id=project_id)
+            if workflow.project_id in allowed_projects
+        ]
         return [workflow.model_dump(mode="json") for workflow in workflows]
 
     @app.get("/api/v1/workflows/{workflow_id}", tags=["workflows"])
-    def get_workflow(workflow_id: str) -> dict[str, object]:
+    def get_workflow(
+        workflow_id: str, actor_id: str = Depends(_authenticated_actor)
+    ) -> dict[str, object]:
         workflow = WorkflowRepository(_database(app)).get(workflow_id)
         if workflow is None:
             raise HTTPException(status_code=404, detail=f"workflow not found: {workflow_id}")
+        _require_project_access(app, workflow.project_id, actor_id, write=False)
         return workflow.model_dump(mode="json")
 
     @app.get("/api/v1/workflows/{workflow_id}/agent-tree", tags=["workflows"])
-    def get_agent_tree(workflow_id: str) -> dict[str, object]:
+    def get_agent_tree(
+        workflow_id: str, actor_id: str = Depends(_authenticated_actor)
+    ) -> dict[str, object]:
         workflow = WorkflowRepository(_database(app)).get(workflow_id)
         if workflow is None:
             raise HTTPException(status_code=404, detail=f"workflow not found: {workflow_id}")
+        _require_project_access(app, workflow.project_id, actor_id, write=False)
         return {
             "workflow_id": workflow.id,
             "supervisor_run_id": workflow.supervisor_run_id,
@@ -754,10 +845,13 @@ def create_app(
         }
 
     @app.get("/api/v1/workflows/{workflow_id}/pr", tags=["workflows"])
-    def get_workflow_pr(workflow_id: str) -> dict[str, object]:
+    def get_workflow_pr(
+        workflow_id: str, actor_id: str = Depends(_authenticated_actor)
+    ) -> dict[str, object]:
         workflow = WorkflowRepository(_database(app)).get(workflow_id)
         if workflow is None:
             raise HTTPException(status_code=404, detail=f"workflow not found: {workflow_id}")
+        _require_project_access(app, workflow.project_id, actor_id, write=False)
         if workflow.pr_document is None:
             raise HTTPException(status_code=404, detail="PR document not generated")
         return workflow.pr_document.model_dump(mode="json")
@@ -766,11 +860,13 @@ def create_app(
     def review_workflow_pr(
         workflow_id: str,
         payload: ReviewDecisionRequest,
+        actor_id: str = Depends(_authenticated_actor),
     ) -> dict[str, object]:
         repository = WorkflowRepository(_database(app))
         workflow = repository.get(workflow_id)
         if workflow is None:
             raise HTTPException(status_code=404, detail=f"workflow not found: {workflow_id}")
+        _require_project_access(app, workflow.project_id, actor_id, write=True)
         if workflow.pr_document is None:
             raise HTTPException(status_code=404, detail="PR document not generated")
         updated = workflow.model_copy(
@@ -785,10 +881,20 @@ def create_app(
 
     @app.get("/api/v1/memory", tags=["memory"])
     def list_memory(
-        owner_id: str = Query(default="local-user"),
+        owner_id: str | None = Query(default=None),
         scope: MemoryScope | None = Query(default=None),
         include_disabled: bool = Query(default=True),
+        actor_id: str = Depends(_authenticated_actor),
     ) -> list[dict[str, object]]:
+        if scope == MemoryScope.PROJECT:
+            if owner_id is None:
+                raise HTTPException(status_code=422, detail="project memory requires owner_id")
+            _require_project_access(app, owner_id, actor_id, write=False)
+        else:
+            if owner_id is not None and owner_id != actor_id:
+                raise HTTPException(status_code=403, detail="cannot list another user's memory")
+            owner_id = actor_id
+            scope = MemoryScope.USER
         entries = MemoryRepository(_database(app)).list(
             owner_id=owner_id,
             scope=scope,
@@ -797,8 +903,19 @@ def create_app(
         return [entry.model_dump(mode="json") for entry in entries]
 
     @app.post("/api/v1/memory", status_code=status.HTTP_201_CREATED, tags=["memory"])
-    def add_memory(payload: MemoryCreateRequest) -> dict[str, object]:
-        store = _memory_store(app, payload.scope, payload.owner_id)
+    def add_memory(
+        payload: MemoryCreateRequest, actor_id: str = Depends(_authenticated_actor)
+    ) -> dict[str, object]:
+        if payload.scope == MemoryScope.PROJECT:
+            if payload.owner_id is None:
+                raise HTTPException(status_code=422, detail="project memory requires owner_id")
+            _require_project_access(app, payload.owner_id, actor_id, write=True)
+            owner_id = payload.owner_id
+        else:
+            if payload.owner_id is not None and payload.owner_id != actor_id:
+                raise HTTPException(status_code=403, detail="cannot write another user's memory")
+            owner_id = actor_id
+        store = _memory_store(app, payload.scope, owner_id)
         result = store.write_candidate(
             key=payload.key,
             content=payload.content,
@@ -809,11 +926,16 @@ def create_app(
         return result.entry.model_dump(mode="json")
 
     @app.patch("/api/v1/memory/{memory_id}", tags=["memory"])
-    def update_memory(memory_id: str, payload: MemoryUpdateRequest) -> dict[str, object]:
+    def update_memory(
+        memory_id: str,
+        payload: MemoryUpdateRequest,
+        actor_id: str = Depends(_authenticated_actor),
+    ) -> dict[str, object]:
         repository = MemoryRepository(_database(app))
         entry = repository.get(memory_id)
         if entry is None:
             raise HTTPException(status_code=404, detail=f"memory entry not found: {memory_id}")
+        _require_memory_access(app, entry.scope, entry.owner_id, actor_id)
         store = _memory_store(app, entry.scope, entry.owner_id)
         try:
             if payload.content is not None or payload.key is not None:
@@ -833,11 +955,14 @@ def create_app(
         status_code=status.HTTP_204_NO_CONTENT,
         tags=["memory"],
     )
-    def delete_memory(memory_id: str) -> Response:
+    def delete_memory(
+        memory_id: str, actor_id: str = Depends(_authenticated_actor)
+    ) -> Response:
         repository = MemoryRepository(_database(app))
         entry = repository.get(memory_id)
         if entry is None:
             raise HTTPException(status_code=404, detail=f"memory entry not found: {memory_id}")
+        _require_memory_access(app, entry.scope, entry.owner_id, actor_id)
         try:
             _memory_store(app, entry.scope, entry.owner_id).delete(memory_id)
         except KeyError as exc:
@@ -886,6 +1011,54 @@ def _normalize_project_root(raw_path: str, *, base_dir: Path) -> Path:
     return resolved
 
 
+def _require_project_access(
+    app: FastAPI, project_id: str, actor_id: str, *, write: bool
+) -> ProjectRecord:
+    """Resolve a project only after the actor holds the required project role."""
+    database = _database(app)
+    project = ProjectRepository(database).get(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail=f"project not found: {project_id}")
+    service = TeamService(TeamRepository(database))
+    try:
+        if write:
+            service.require_project_write(project_id, actor_id)
+        else:
+            service.require_project_read(project_id, actor_id)
+    except AccessDeniedError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return project
+
+
+def _require_memory_access(
+    app: FastAPI, scope: MemoryScope, owner_id: str, actor_id: str
+) -> None:
+    """Enforce ownership for user memory and membership for project memory."""
+    if scope == MemoryScope.PROJECT:
+        _require_project_access(app, owner_id, actor_id, write=True)
+        return
+    if owner_id != actor_id:
+        raise HTTPException(status_code=403, detail="memory ownership is required")
+
+
+def _secret_digest(value: str) -> str:
+    """Return a database-safe digest for short-lived one-time pairing material."""
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _apply_security_headers(response: Response) -> Response:
+    """Keep bearer credentials and Web assets isolated from common browser attacks."""
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; "
+        "form-action 'self'; object-src 'none'; connect-src 'self' ws: wss:"
+    )
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    return response
+
+
 def _record_runtime_log(
     app: FastAPI,
     *,
@@ -908,7 +1081,6 @@ def _record_runtime_log(
 
 def _database(app: FastAPI) -> Database:
     database: Database = app.state.database
-    database.create_all()
     return database
 
 
@@ -924,7 +1096,7 @@ def _memory_store(app: FastAPI, scope: MemoryScope, owner_id: str) -> LongTermMe
             raise HTTPException(status_code=404, detail=f"project not found: {owner_id}")
         path = Path(project.root_path) / ".codeassist" / "MEMORY.md"
     else:
-        path = Path.home() / ".codeassist" / "MEMORY.md"
+        path = app.state.workspace_root / ".codeassist" / "users" / owner_id / "MEMORY.md"
     return LongTermMemoryStore(
         path,
         owner_id=owner_id,

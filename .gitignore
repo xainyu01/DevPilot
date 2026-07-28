@@ -17,6 +17,7 @@ apps/web/dist/
 
 # Local runtime data
 .codeassist/
+deploy/secrets/
 
 # Learning notes are local-only and must never be committed.
 docs/learn/

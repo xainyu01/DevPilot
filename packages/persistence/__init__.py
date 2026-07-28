@@ -4,6 +4,7 @@ The package is the database adapter boundary.  Domain contracts remain in
 ``packages.contracts`` and can be used without importing this package.
 """
 
+from .backup import backup_sqlite_database
 from .database import Database, default_database_url
 from .models import Base
 from .repositories import (
@@ -20,6 +21,7 @@ from .repositories import (
 
 __all__ = [
     "Base",
+    "backup_sqlite_database",
     "CheckpointRepository",
     "Database",
     "MemoryRepository",

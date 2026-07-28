@@ -1,0 +1,16 @@
+.git
+.idea
+.pytest_cache
+.ruff_cache
+.uv-cache
+.venv
+.codeassist
+node_modules
+.pnpm-store
+apps/web/node_modules
+apps/web/dist
+docs/learn
+deploy/secrets
+__pycache__
+*.py[cod]
+*.db

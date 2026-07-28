@@ -1,44 +1,40 @@
 # CodeAssist 2.0 实施进度
 
-> 最后更新：2026-07-29 01:40（Asia/Shanghai）
-> 当前批次：B8  0%（未开始）
+> 最后更新：2026-07-29 03:30（Asia/Shanghai）
+> 当前批次：B8，95%（容器运行验收待执行）
 
-进度事实源为 [`docs/progress.json`](progress.json)。
+进度事实源为 [`progress.json`](progress.json)。
 
 | 批次 | 状态 | 完成度 | 内容 |
 |---|---|---:|---|
-| B0 | 已完成 | 100% | Monorepo、FastAPI、CLI、契约和交接 Agent |
-| B1 | 已完成 | 100% | LangGraph 内核、模型网关、运行生命周期 |
-| B2 | 已完成 | 100% | 工具、策略、Shell/Git、人工审批和审计 |
-| B3 | 已完成 | 100% | 数据库、会话记忆、项目规则和长期记忆 |
-| B4 | 已完成 | 100% | 仓库分析、证据链、Agent 执行树、测试和 PR 文档 |
-| B5 | 已完成 | 100% | CLI、React/Vite 工作台、会话事件和研发视图 |
-| B6 | 已完成 | 100% | Windows-first FastAPI/Vite 本地 Web、平台端口和浏览器启动 |
-| B7 | 已完成 | 100% | 团队、RBAC、Demo 认证、会话共享、受保护 API/WebSocket 与远程 Host 配对 |
-| B8 | 未开始 | 0% | 稳定化与发布 |
+| B0 | 已完成 | 100% | 基础骨架与交接机制 |
+| B1 | 已完成 | 100% | LangGraph 内核、模型网关与生命周期 |
+| B2 | 已完成 | 100% | 工具、策略、审批与审计 |
+| B3 | 已完成 | 100% | 数据、会话/长期记忆与项目上下文 |
+| B4 | 已完成 | 100% | 仓库分析、工作流、测试与 PR 文档 |
+| B5 | 已完成 | 100% | CLI、React/Vite 工作台与会话事件 |
+| B6 | 已完成 | 100% | Windows-first 本地 Web 与平台端口 |
+| B7 | 已完成 | 100% | 用户、团队、RBAC、共享与远程 Host |
+| B8 | 进行中 | 95% | 稳定化、安全、恢复、部署与发布 |
 
-## B6 验收结果
+## B8 已完成
 
-- [x] 根目录计划书已修订为 FastAPI + Vite Web 优先路线，并保留原计划快照。
-- [x] FastAPI 托管 `apps/web/dist`，支持静态资源和 SPA 路由回退。
-- [x] `codeassist serve` 支持 `--open-browser/--no-open-browser`、端口预检和明确启动错误。
-- [x] 项目登记执行绝对路径规范化、存在性校验和目录校验。
-- [x] `/api/v1/runtime/logs` 提供本地运行日志入口。
-- [x] Web 工作台支持登记项目、创建会话和 WebSocket 首次对话。
-- [x] 已删除未完成的 Tauri、Rust、Sidecar 和桌面打包依赖。
-- [x] Windows 本地服务冒烟通过：`healthz`、Vite 首页、元数据和运行日志入口均可访问。
-- [x] 完整验收：`43 passed`、Ruff、Vite build、`codeassist doctor` 和 `git diff --check` 通过。
-- [x] Linux/macOS 兼容边界已抽取为平台端口和能力声明；具体适配器作为后续 TODO，不阻塞当前 Windows-first 批次。
+- B7 固定用户 `admin`、`admin1`、`admin2`、`admin3` 会通过 `TeamRepository` 写入 `users` 表；JWT 的 `sub` 与用户 ID 对应，随后继续使用项目成员、团队成员和会话共享的正常 RBAC 链路。
+- 认证令牌与 Host token 使用带过期时间、用途声明和 HS256 签名的三段式 JWT；服务重启后使用相同签名密钥仍可验证。
+- 项目规则、仓库扫描、工作流、Agent 树、PR 文档和用户/项目记忆均增加资源级授权检查。
+- 远程 Host 配对码只保存摘要，十分钟后失效且成功配对后不可重放；迁移、SQLite 备份、readiness、附件限制、登录限流和浏览器安全响应头已经落地。
+- 已提交 Dockerfile、Docker Compose、发布候选版本 `0.1.0rc1` 及部署、升级和回滚指南。
+- 已通过 `53 passed`、`ruff check .`、`codeassist doctor`、Vite production build、数据库升级/降级回归和 `git diff --check`。
 
-## 下一阶段
+## 待完成的发布验收
 
-进入 B8：性能、恢复、安全、部署和发布验收。固定 Demo 凭据与本地 Host 通道在 B8 替换为发布级安全配置。
-
-## 统一验收命令
+当前工作站未安装 Docker、`docker-compose` 或 Podman，因而未能运行容器配置解析和启动验收。这是 B8 唯一未完成的外部环境检查；批次不可标记为完成或创建 B8 完成提交，直到在 Docker 可用环境执行：
 
 ```powershell
-uv --cache-dir .uv-cache run pytest
-uv --cache-dir .uv-cache run ruff check .
-uv --cache-dir .uv-cache run codeassist doctor
-pnpm --dir apps/web build
+docker compose config
+docker compose up --build -d
+curl http://127.0.0.1:8000/healthz
+curl http://127.0.0.1:8000/readyz
 ```
+
+详见 [B8 设计](architecture/BATCH-08-STABILIZATION-RELEASE.md) 与[发布指南](RELEASE.md)。

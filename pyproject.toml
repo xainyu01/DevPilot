@@ -1,6 +1,6 @@
 [project]
 name = "codeassist-next"
-version = "0.1.0"
+version = "0.1.0rc1"
 description = "A local-first multi-agent development assistant."
 requires-python = ">=3.11"
 dependencies = [
@@ -10,6 +10,7 @@ dependencies = [
     "langchain-openai>=0.3,<1",
     "langgraph>=0.6,<1",
     "pydantic>=2.10,<3",
+    "psycopg[binary]>=3.2,<4",
     "rich>=13.9,<14",
     "sqlalchemy>=2.0,<3",
     "typer>=0.15,<1",

@@ -19,18 +19,23 @@ def test_health_endpoint() -> None:
     assert response.json() == {"status": "ok", "service": "codeassist-api"}
 
 
-def test_meta_declares_uv_and_stage_six() -> None:
+def test_meta_declares_uv_and_stage_eight() -> None:
     response = TestClient(app).get("/api/v1/meta")
 
     assert response.status_code == 200
     assert response.json()["dependency_manager"] == "uv"
-    assert response.json()["stage"] == 6
+    assert response.json()["stage"] == 8
     assert response.json()["features"]["agent_core"] == "available"
     assert response.json()["features"]["frontend"] == "available"
     assert response.json()["features"]["web_hosting"] == "available_when_built"
     assert response.json()["features"]["desktop_shell"] == "deferred_optional"
     assert response.json()["features"]["project_registration"] == "available_with_path_validation"
     assert response.json()["features"]["runtime_logs"] == "available"
+    assert (
+        response.json()["features"]["authentication"]
+        == "available_with_fixed_b7_accounts_and_signed_jwt"
+    )
+    assert response.json()["features"]["release_readiness"] == "available"
 
 
 def test_fastapi_hosts_vite_production_build(tmp_path: Path) -> None:

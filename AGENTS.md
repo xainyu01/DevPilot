@@ -70,3 +70,9 @@ uv --cache-dir .uv-cache run codeassist handover write --reason paused
 - `docs/learn/` 已加入 `.gitignore`。如果必须在本地资料分支追踪新学习文件，只能在 `local-with-learn` 上显式暂存，不能在 `master` 上使用 `git add -f`。
 - 公开代码提交流程必须在 `master` 上完成，并使用 `git push origin master:main`；推送前检查 `git ls-tree -r --name-only HEAD docs/learn` 不应有输出。
 - 如果发现公开分支历史包含 `docs/learn/`，必须先保留本地备份分支，再过滤公开历史；不得直接删除本地学习资料或覆盖 `local-with-learn`。
+
+## B7 固定用户与发布前认证约束
+
+- `admin`、`admin1`、`admin2`、`admin3` 是 B7 至最终公开上线前的正式固定用户；服务启动时必须通过正常仓储写入 `users` 表，JWT 的 `sub` 必须对应这些用户 ID。
+- 这些用户继续走数据库中的团队成员、项目成员和会话共享/RBAC 授权链路；不得使用绕过用户、成员关系或资源级权限检查的演示分支。
+- 在最终公开上线前保留既有账号和密码，不另行替换为外部凭据配置。认证令牌可升级为有过期时间和签名校验的 JWT；最终上线前的凭据替换必须作为独立、安全审计过的变更推进。
