@@ -12,11 +12,30 @@ branch_labels = None
 depends_on = None
 
 
+_B3_TABLES = (
+    "projects",
+    "conversation_sessions",
+    "messages",
+    "content_blocks",
+    "session_summaries",
+    "memory_entries",
+    "memory_revisions",
+    "project_rules",
+    "agent_runs",
+    "run_events",
+    "checkpoints",
+    "approvals",
+    "audit_logs",
+)
+
+
 def upgrade() -> None:
-    # The first revision is generated from the single source-of-truth model
-    # metadata.  Later revisions should use explicit Alembic operations.
-    Base.metadata.create_all(op.get_bind())
+    # Keep this historical revision stable when later batches add tables to
+    # the model metadata.  Later revisions use explicit Alembic operations.
+    tables = [Base.metadata.tables[name] for name in _B3_TABLES]
+    Base.metadata.create_all(op.get_bind(), tables=tables)
 
 
 def downgrade() -> None:
-    Base.metadata.drop_all(op.get_bind())
+    tables = [Base.metadata.tables[name] for name in reversed(_B3_TABLES)]
+    Base.metadata.drop_all(op.get_bind(), tables=tables)

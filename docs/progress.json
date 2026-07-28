@@ -1,8 +1,8 @@
 {
-  "overall_percent": 60,
-  "current_batch": "B3",
-  "next_action": "开始阶段 4：实现研发工作流与仓库解析",
-  "updated_at": "2026-07-28T18:00:00+08:00",
+  "overall_percent": 70,
+  "current_batch": "B4",
+  "next_action": "开始阶段 5：实现 CLI 与 Web 工作台",
+  "updated_at": "2026-07-28T19:01:20+08:00",
   "constraints": [
     "所有新产生的文档放在 docs/ 目录",
     "Python 依赖只使用 uv 管理，并提交 uv.lock",
@@ -82,15 +82,35 @@
         "增加项目、会话、消息、规则发现和长期记忆 API"
       ],
       "in_progress": [],
-      "next_steps": ["B4 建立仓库解析、增量索引和 Bug 研发工作流"],
+      "next_steps": [],
       "blockers": []
     },
     {
-      "id": "B4-B8",
-      "title": "阶段 4～8：研发工作流、客户端、团队与发布",
+      "id": "B4",
+      "title": "阶段 4：研发工作流",
+      "status": "已完成（本批次）",
+      "percent": 100,
+      "scope": ["仓库解析", "增量索引", "证据链", "Agent 执行树", "测试调度", "Worktree", "PR 文档"],
+      "completed": [
+        "实现语言、框架、包管理器、命令、规则、符号和 Git 元数据扫描",
+        "实现基于文件哈希和 stat 元数据的增量索引并保存 RepositoryProfile",
+        "定义 IssueContext、EvidenceItem、BugHypothesis 和 WorkflowRun 结构化契约",
+        "实现 Issue/日志/失败测试的证据收集和带置信度 Bug 假设",
+        "实现 Supervisor、按需子 Agent、Assignment 权限交集、深度/并发/数量/预算限制和资源回收",
+        "实现确定性 ModelRouter、测试计划/并行/超时/重试/产物和 Worktree 租约",
+        "实现 PR Markdown 生成、导出和人工审核状态 API",
+        "新增 repository_profiles、workflow_runs 持久化和 B4 Alembic 迁移"
+      ],
+      "in_progress": [],
+      "next_steps": ["B5 完成 CLI 与 Web 工作台"],
+      "blockers": []
+    },
+    {
+      "id": "B5-B8",
+      "title": "阶段 5～8：客户端、团队与发布",
       "status": "未开始",
       "percent": 0,
-      "scope": ["按计划书后续阶段实施"],
+      "scope": ["CLI/Web", "Tauri", "团队共享", "稳定化发布"],
       "completed": [],
       "in_progress": [],
       "next_steps": ["完成前一批验收后拆分下一批"],

@@ -1,8 +1,8 @@
 # CodeAssist 2.0 实施进度
 
 > 最后更新：2026-07-28
-> 当前批次：B3
-> 总体完成度：60%
+> 当前批次：B4
+> 总体完成度：70%
 
 ## 进度规则
 
@@ -18,7 +18,8 @@
 | B1 | 已完成（本批次） | 100% | LangGraph 内核、模型网关、多模态、运行生命周期 |
 | B2 | 已完成（本批次） | 100% | 工具注册、策略、文件/搜索/补丁、Shell/Git、审批、审计 |
 | B3 | 已完成（本批次） | 100% | 数据库、会话记忆、项目规则、长期记忆 |
-| B4-B8 | 未开始 | 0% | 研发工作流、客户端、团队、发布 |
+| B4 | 已完成（本批次） | 100% | 仓库解析、增量索引、证据链、Agent 执行树、测试调度、Worktree、PR 文档 |
+| B5-B8 | 未开始 | 0% | CLI/Web、桌面端、团队共享、稳定化发布 |
 
 ## B0 已完成
 
@@ -95,6 +96,26 @@
 - [x] API 集成测试验证新建应用进程后仍可恢复会话消息和项目索引。
 - [x] 长期记忆敏感信息拒绝、编辑、启用/禁用、删除和规则优先级均有测试覆盖。
 
+## B4 已完成
+
+- [x] 实现语言、框架、包管理器、命令、规则、符号和 Git 元数据扫描。
+- [x] 实现基于文件哈希和 stat 元数据的增量索引并保存 `RepositoryProfile`。
+- [x] 定义 `IssueContext`、`EvidenceItem`、`BugHypothesis` 和 `WorkflowRun` 结构化契约。
+- [x] 实现 Issue/日志/失败测试的证据收集和带置信度 Bug 假设。
+- [x] 实现 Supervisor、按需子 Agent、Assignment 权限交集、深度/并发/数量/预算限制和资源回收。
+- [x] 实现确定性 `ModelRouter`、测试计划/并行/超时/重试/产物和 Worktree 租约。
+- [x] 实现 PR Markdown 生成、导出和人工审核状态 API。
+- [x] 新增 `repository_profiles`、`workflow_runs` 持久化和 B4 Alembic 迁移。
+
+## B4 验收结果
+
+- [x] `uv --cache-dir .uv-cache run pytest`：35 passed（2 个上游弃用警告）。
+- [x] `uv --cache-dir .uv-cache run ruff check .`：通过。
+- [x] 临时 SQLite 数据库完成 `alembic upgrade head`、`downgrade base`、`upgrade head` 往返，最终为 `0002_b4_workflows (head)`。
+- [x] B4 专项测试验证增量索引、权限边界、模型预算、测试重试/超时、Worktree 回收和 PR 文档追溯。
+- [x] API 集成测试验证仓库扫描、工作流 Agent 执行树、PR 审核状态和新进程恢复。
+- [x] B4 文档见 `docs/architecture/BATCH-04-DEV-WORKFLOWS.md`。
+
 ## 验收命令
 
 ```powershell
@@ -107,4 +128,4 @@ uv run codeassist handover write --reason paused
 
 ## 下一批次
 
-B4 将建立仓库解析、语言/框架识别、增量索引和 Bug 研发工作流的结构化契约。
+B5 将建立 CLI 与 Web 工作台，并消费 B1～B4 的 REST、事件、审批和研发工作流契约。

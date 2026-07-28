@@ -1,4 +1,4 @@
-"""FastAPI entry point for the B3 persistence and memory service boundary."""
+"""FastAPI entry point for the B4 persistence and development workflow boundary."""
 
 import os
 from pathlib import Path
@@ -6,18 +6,28 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Query, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from packages.contracts import ChatMessage, MemoryScope, SessionRecord
+from packages.contracts import (
+    ChatMessage,
+    IssueContext,
+    MemoryScope,
+    ReviewStatus,
+    SessionRecord,
+)
+from packages.dev_workflows import DevelopmentWorkflowService
 from packages.handover_agent import HandoverAgent
 from packages.memory import LongTermMemoryStore
 from packages.persistence import (
     Database,
     MemoryRepository,
     ProjectRepository,
+    RepositoryProfileRepository,
     RuleRepository,
     SessionRepository,
+    WorkflowRepository,
     default_database_url,
 )
 from packages.project_context import ProjectContextService
+from packages.repo_intel import RepositoryScanner
 from packages.tool_runtime import ToolRuntime
 
 
@@ -61,6 +71,25 @@ class RuleDiscoveryRequest(BaseModel):
     current_dir: str | None = None
 
 
+class WorkflowCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    logs: str = ""
+    failing_tests: list[str] = Field(default_factory=list)
+    attachments: list[str] = Field(default_factory=list)
+    execute_tests: bool = False
+    create_worktree: bool = False
+    full_tests: bool = False
+
+
+class ReviewDecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: ReviewStatus
+
+
 def create_app(
     *,
     database_url: str | None = None,
@@ -86,7 +115,7 @@ def create_app(
         return {
             "name": "codeassist-next",
             "version": "0.1.0",
-            "stage": 3,
+            "stage": 4,
             "dependency_manager": "uv",
             "features": {
                 "agent_core": "available",
@@ -103,6 +132,10 @@ def create_app(
                 "session_memory": "available",
                 "project_context": "available",
                 "long_term_memory": "available_with_policy_gate",
+                "repository_intelligence": "available",
+                "development_workflows": "available",
+                "test_orchestrator": "available",
+                "pr_documents": "available_with_review_gate",
                 "frontend": "planned",
                 "tauri": "planned",
             },
@@ -208,6 +241,103 @@ def create_app(
             repository=RuleRepository(_database(app)),
         )
         return {**context.model_dump(mode="json"), "merged_text": context.merged_text}
+
+    @app.post("/api/v1/projects/{project_id}/repository/scan", tags=["workflows"])
+    def scan_repository(project_id: str) -> dict[str, object]:
+        database = _database(app)
+        project = ProjectRepository(database).get(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail=f"project not found: {project_id}")
+        try:
+            profile = RepositoryScanner(Path(project.root_path)).scan(project_id=project_id)
+        except (NotADirectoryError, OSError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        RepositoryProfileRepository(database).save(profile)
+        return profile.model_dump(mode="json")
+
+    @app.get("/api/v1/projects/{project_id}/repository-profile", tags=["workflows"])
+    def get_repository_profile(project_id: str) -> dict[str, object]:
+        profile = RepositoryProfileRepository(_database(app)).get(project_id)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="repository profile not found")
+        return profile.model_dump(mode="json")
+
+    @app.post("/api/v1/workflows", status_code=status.HTTP_201_CREATED, tags=["workflows"])
+    def create_workflow(payload: WorkflowCreateRequest) -> dict[str, object]:
+        database = _database(app)
+        project = ProjectRepository(database).get(payload.project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail=f"project not found: {payload.project_id}")
+        workflow = DevelopmentWorkflowService(
+            project_id=project.id,
+            project_root=Path(project.root_path),
+            profile_store=RepositoryProfileRepository(database),
+            workflow_store=WorkflowRepository(database),
+        ).run(
+            IssueContext(
+                description=payload.description,
+                logs=payload.logs,
+                failing_tests=payload.failing_tests,
+                attachments=payload.attachments,
+            ),
+            execute_tests=payload.execute_tests,
+            create_worktree=payload.create_worktree,
+            full_tests=payload.full_tests,
+        )
+        return workflow.model_dump(mode="json")
+
+    @app.get("/api/v1/workflows", tags=["workflows"])
+    def list_workflows(project_id: str | None = Query(default=None)) -> list[dict[str, object]]:
+        workflows = WorkflowRepository(_database(app)).list(project_id=project_id)
+        return [workflow.model_dump(mode="json") for workflow in workflows]
+
+    @app.get("/api/v1/workflows/{workflow_id}", tags=["workflows"])
+    def get_workflow(workflow_id: str) -> dict[str, object]:
+        workflow = WorkflowRepository(_database(app)).get(workflow_id)
+        if workflow is None:
+            raise HTTPException(status_code=404, detail=f"workflow not found: {workflow_id}")
+        return workflow.model_dump(mode="json")
+
+    @app.get("/api/v1/workflows/{workflow_id}/agent-tree", tags=["workflows"])
+    def get_agent_tree(workflow_id: str) -> dict[str, object]:
+        workflow = WorkflowRepository(_database(app)).get(workflow_id)
+        if workflow is None:
+            raise HTTPException(status_code=404, detail=f"workflow not found: {workflow_id}")
+        return {
+            "workflow_id": workflow.id,
+            "supervisor_run_id": workflow.supervisor_run_id,
+            "agent_runs": [run.model_dump(mode="json") for run in workflow.agent_runs],
+        }
+
+    @app.get("/api/v1/workflows/{workflow_id}/pr", tags=["workflows"])
+    def get_workflow_pr(workflow_id: str) -> dict[str, object]:
+        workflow = WorkflowRepository(_database(app)).get(workflow_id)
+        if workflow is None:
+            raise HTTPException(status_code=404, detail=f"workflow not found: {workflow_id}")
+        if workflow.pr_document is None:
+            raise HTTPException(status_code=404, detail="PR document not generated")
+        return workflow.pr_document.model_dump(mode="json")
+
+    @app.patch("/api/v1/workflows/{workflow_id}/pr/review", tags=["workflows"])
+    def review_workflow_pr(
+        workflow_id: str,
+        payload: ReviewDecisionRequest,
+    ) -> dict[str, object]:
+        repository = WorkflowRepository(_database(app))
+        workflow = repository.get(workflow_id)
+        if workflow is None:
+            raise HTTPException(status_code=404, detail=f"workflow not found: {workflow_id}")
+        if workflow.pr_document is None:
+            raise HTTPException(status_code=404, detail="PR document not generated")
+        updated = workflow.model_copy(
+            update={
+                "pr_document": workflow.pr_document.model_copy(
+                    update={"review_status": payload.status}
+                )
+            }
+        )
+        repository.save(updated)
+        return updated.pr_document.model_dump(mode="json")
 
     @app.get("/api/v1/memory", tags=["memory"])
     def list_memory(

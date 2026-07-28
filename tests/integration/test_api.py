@@ -10,12 +10,12 @@ def test_health_endpoint() -> None:
     assert response.json() == {"status": "ok", "service": "codeassist-api"}
 
 
-def test_meta_declares_uv_and_stage_three() -> None:
+def test_meta_declares_uv_and_stage_four() -> None:
     response = TestClient(app).get("/api/v1/meta")
 
     assert response.status_code == 200
     assert response.json()["dependency_manager"] == "uv"
-    assert response.json()["stage"] == 3
+    assert response.json()["stage"] == 4
     assert response.json()["features"]["agent_core"] == "available"
 
 

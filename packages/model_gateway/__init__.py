@@ -3,6 +3,7 @@
 from .adapters import AnthropicAdapter, FakeModel, OllamaAdapter, OpenAIAdapter
 from .errors import AdapterNotImplementedError, ModelAdapterError, UnsupportedCapabilityError
 from .gateway import ChatModelAdapter, ModelGateway
+from .router import ModelRouter, ModelRoutingError, default_model_router
 
 __all__ = [
     "AdapterNotImplementedError",
@@ -11,6 +12,9 @@ __all__ = [
     "FakeModel",
     "ModelAdapterError",
     "ModelGateway",
+    "ModelRouter",
+    "ModelRoutingError",
+    "default_model_router",
     "OpenAIAdapter",
     "OllamaAdapter",
     "UnsupportedCapabilityError",

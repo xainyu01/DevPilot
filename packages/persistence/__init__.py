@@ -10,9 +10,11 @@ from .repositories import (
     CheckpointRepository,
     MemoryRepository,
     ProjectRepository,
+    RepositoryProfileRepository,
     RuleRepository,
     RunRepository,
     SessionRepository,
+    WorkflowRepository,
 )
 
 __all__ = [
@@ -21,8 +23,10 @@ __all__ = [
     "Database",
     "MemoryRepository",
     "ProjectRepository",
+    "RepositoryProfileRepository",
     "RuleRepository",
     "RunRepository",
     "SessionRepository",
+    "WorkflowRepository",
     "default_database_url",
 ]

@@ -165,6 +165,31 @@ class ProjectRuleRow(Base):
     discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class RepositoryProfileRow(Base):
+    __tablename__ = "repository_profiles"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    index_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    profile_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class WorkflowRunRow(Base):
+    __tablename__ = "workflow_runs"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    workflow_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class AgentRunRow(Base):
     __tablename__ = "agent_runs"
 
@@ -250,8 +275,10 @@ __all__ = [
     "MessageRow",
     "ProjectRow",
     "ProjectRuleRow",
+    "RepositoryProfileRow",
     "RunEventRow",
     "SessionRow",
     "SessionSummaryRow",
+    "WorkflowRunRow",
     "utc_now",
 ]

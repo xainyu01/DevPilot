@@ -17,6 +17,7 @@ from packages.contracts import (
     MemoryScope,
     ProjectRecord,
     ProjectRule,
+    RepositoryProfile,
     RunContext,
     RunEvent,
     RunStatus,
@@ -25,6 +26,7 @@ from packages.contracts import (
     SessionStatus,
     SessionSummary,
     StoredMessage,
+    WorkflowRun,
 )
 
 from .database import Database
@@ -37,9 +39,11 @@ from .models import (
     MessageRow,
     ProjectRow,
     ProjectRuleRow,
+    RepositoryProfileRow,
     RunEventRow,
     SessionRow,
     SessionSummaryRow,
+    WorkflowRunRow,
     utc_now,
 )
 
@@ -396,6 +400,73 @@ class RuleRepository:
                 query = query.where(ProjectRuleRow.enabled.is_(True))
             query = query.order_by(ProjectRuleRow.priority.asc(), ProjectRuleRow.source_path.asc())
             return [_rule_from_row(row) for row in db.scalars(query)]
+
+
+class RepositoryProfileRepository:
+    """Persist the latest incremental repository snapshot per project."""
+
+    def __init__(self, database: Database) -> None:
+        self.database = database
+
+    def save(self, profile: RepositoryProfile) -> RepositoryProfile:
+        if profile.project_id is None:
+            raise ValueError("repository profile must have a project_id before persistence")
+        with self.database.session() as db:
+            row = db.scalar(
+                select(RepositoryProfileRow).where(
+                    RepositoryProfileRow.project_id == profile.project_id
+                )
+            )
+            if row is None:
+                row = RepositoryProfileRow(id=profile.id, project_id=profile.project_id)
+                db.add(row)
+            row.id = profile.id
+            row.index_version = profile.index_version
+            row.profile_json = _json_value(profile)
+            row.updated_at = profile.indexed_at
+        return profile
+
+    def get(self, project_id: str) -> RepositoryProfile | None:
+        with self.database.session() as db:
+            row = db.scalar(
+                select(RepositoryProfileRow).where(
+                    RepositoryProfileRow.project_id == project_id
+                )
+            )
+            return RepositoryProfile.model_validate(row.profile_json) if row is not None else None
+
+
+class WorkflowRepository:
+    """Store complete workflow snapshots for restart, trace and review views."""
+
+    def __init__(self, database: Database) -> None:
+        self.database = database
+
+    def save(self, workflow: WorkflowRun) -> WorkflowRun:
+        with self.database.session() as db:
+            row = db.get(WorkflowRunRow, workflow.id)
+            if row is None:
+                row = WorkflowRunRow(id=workflow.id, project_id=workflow.project_id)
+                db.add(row)
+            row.project_id = workflow.project_id
+            row.status = workflow.status.value
+            row.workflow_json = _json_value(workflow)
+            row.updated_at = workflow.updated_at
+            if row.created_at is None:
+                row.created_at = workflow.created_at
+        return workflow
+
+    def get(self, workflow_id: str) -> WorkflowRun | None:
+        with self.database.session() as db:
+            row = db.get(WorkflowRunRow, workflow_id)
+            return WorkflowRun.model_validate(row.workflow_json) if row is not None else None
+
+    def list(self, project_id: str | None = None) -> list[WorkflowRun]:
+        with self.database.session() as db:
+            query = select(WorkflowRunRow).order_by(WorkflowRunRow.updated_at.desc())
+            if project_id is not None:
+                query = query.where(WorkflowRunRow.project_id == project_id)
+            return [WorkflowRun.model_validate(row.workflow_json) for row in db.scalars(query)]
 
 
 class RunRepository:
