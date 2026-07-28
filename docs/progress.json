@@ -1,0 +1,100 @@
+{
+  "overall_percent": 60,
+  "current_batch": "B3",
+  "next_action": "开始阶段 4：实现研发工作流与仓库解析",
+  "updated_at": "2026-07-28T18:00:00+08:00",
+  "constraints": [
+    "所有新产生的文档放在 docs/ 目录",
+    "Python 依赖只使用 uv 管理，并提交 uv.lock",
+    "按计划书分批实施，每批都必须可暂停、可验证、可交接",
+    "不默认执行高风险外部操作"
+  ],
+  "batches": [
+    {
+      "id": "B0",
+      "title": "阶段 0：基础骨架与交接机制",
+      "status": "已完成（本批次）",
+      "percent": 100,
+      "scope": ["Monorepo", "FastAPI", "CLI", "契约", "交接 Agent"],
+      "completed": [
+        "建立 apps、packages、tests、docs 分层",
+        "建立 FastAPI 健康检查和元数据接口",
+        "建立 progress.json 结构化进度事实源",
+        "实现 handover Agent 和 CLI 命令",
+        "初始化 Git 仓库",
+        "补充初始化、下一步和 docs 管理指南"
+      ],
+      "in_progress": [],
+      "next_steps": [],
+      "blockers": []
+    },
+    {
+      "id": "B1",
+      "title": "阶段 1：模型与 LangGraph 内核",
+      "status": "已完成（本批次）",
+      "percent": 100,
+      "scope": ["LangGraph", "模型网关", "多模态", "暂停/恢复/取消"],
+      "completed": [
+        "锁定 LangGraph、LangChain OpenAI/Anthropic 依赖并同步 uv.lock",
+        "定义 AgentState、RunContext、RunEvent、Checkpoint 和多模态内容块契约",
+        "实现 load_context、normalize_input、plan、call_model、finalize 最小状态图",
+        "实现 FakeModel、OpenAI/Anthropic 适配器及明确未实现的 Ollama 适配器",
+        "实现能力检测、结构化能力错误、事件序列、暂停、恢复、取消与幂等运行",
+        "更新 API 阶段元数据并补充 B1 单元/契约测试"
+      ],
+      "in_progress": [],
+      "next_steps": [],
+      "blockers": []
+    },
+    {
+      "id": "B2",
+      "title": "阶段 2：工具、策略与人工审批",
+      "status": "已完成（本批次）",
+      "percent": 100,
+      "scope": ["工具注册", "PolicyEngine", "文件/搜索/补丁", "Shell/Git", "人工审批", "审计"],
+      "completed": [
+        "定义工具、风险、策略、审批、结果和审计契约",
+        "实现显式 ToolRegistry 与默认内置工具",
+        "实现工作区边界、能力检查、风险分级和超时/输出限制",
+        "实现文件读取、搜索、精确补丁和统一补丁",
+        "实现参数化白名单 Shell 与固定操作 Git 工具",
+        "实现本次/会话/命令范围的审批状态和脱敏审计日志",
+        "接入 LangGraph interrupt、审批恢复和 Agent 工具事件",
+        "增加 /api/v1/tools 工具目录"
+      ],
+      "in_progress": [],
+      "next_steps": [],
+      "blockers": []
+    },
+    {
+      "id": "B3",
+      "title": "阶段 3：数据、记忆与项目上下文",
+      "status": "已完成（本批次）",
+      "percent": 100,
+      "scope": ["SQLAlchemy/Alembic", "会话记忆", "摘要", "项目规则", "长期记忆"],
+      "completed": [
+        "建立 SQLAlchemy 2 数据模型、SQLite 默认连接和 Alembic 可回滚初始迁移",
+        "实现项目、会话、消息、内容块、摘要、记忆、规则、运行事件和 checkpoint 仓储",
+        "实现会话消息重启恢复、确定性摘要和独立的事件/checkpoint 持久化",
+        "发现并合并用户 MEMORY.md、AGENTS.md、CLAUDE.md 和 .codeassist/*.md，记录来源/作用域/优先级",
+        "实现长期记忆 Markdown 的新增、编辑、启用/禁用、删除和数据库修订索引",
+        "默认阻止 API key、token、password 和 secret 形态写入长期记忆",
+        "增加项目、会话、消息、规则发现和长期记忆 API"
+      ],
+      "in_progress": [],
+      "next_steps": ["B4 建立仓库解析、增量索引和 Bug 研发工作流"],
+      "blockers": []
+    },
+    {
+      "id": "B4-B8",
+      "title": "阶段 4～8：研发工作流、客户端、团队与发布",
+      "status": "未开始",
+      "percent": 0,
+      "scope": ["按计划书后续阶段实施"],
+      "completed": [],
+      "in_progress": [],
+      "next_steps": ["完成前一批验收后拆分下一批"],
+      "blockers": []
+    }
+  ]
+}
