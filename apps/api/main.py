@@ -202,11 +202,15 @@ def create_app(
     app.state.workspace_root = workspace
     app.state.agent_runtime = AgentRuntime(ModelGateway([FakeModel()]))
     app.state.runtime_logs: list[dict[str, object]] = []
-    app.state.demo_tokens: set[str] = set()
+    app.state.demo_tokens: dict[str, str] = {}
     app.state.host_pairing_codes: dict[str, str] = {}
     app.state.host_tokens: dict[str, str] = {}
     _database(app)
-    TeamRepository(database).create_user(UserRecord(id="admin", display_name="Administrator"))
+    account_names = ("admin", "admin1", "admin2", "admin3")
+    for account_name in account_names:
+        TeamRepository(database).create_user(
+            UserRecord(id=account_name, display_name=account_name)
+        )
     _record_runtime_log(
         app,
         event="service.initialized",
@@ -217,14 +221,18 @@ def create_app(
         },
     )
 
+    def _actor_for_token(token: str | None) -> str | None:
+        return app.state.demo_tokens.get(token or "")
+
     def _authenticated_actor(authorization: str | None = Header(default=None)) -> str:
         """Authenticate the demo bearer token without exposing an actor-id request field."""
         if authorization is None or not authorization.startswith("Bearer "):
             raise HTTPException(status_code=401, detail="bearer token is required")
         token = authorization.removeprefix("Bearer ")
-        if token not in app.state.demo_tokens:
+        actor_id = _actor_for_token(token)
+        if actor_id is None:
             raise HTTPException(status_code=401, detail="invalid or expired bearer token")
-        return "admin"
+        return actor_id
 
     @app.middleware("http")
     async def require_demo_auth(request, call_next):
@@ -239,7 +247,7 @@ def create_app(
             authorization = request.headers.get("authorization")
             if authorization is None or not authorization.startswith("Bearer "):
                 return Response(status_code=401, content="bearer token is required")
-            if authorization.removeprefix("Bearer ") not in app.state.demo_tokens:
+            if _actor_for_token(authorization.removeprefix("Bearer ")) is None:
                 return Response(status_code=401, content="invalid or expired bearer token")
         return await call_next(request)
 
@@ -292,15 +300,14 @@ def create_app(
 
     @app.post("/api/v1/auth/login", tags=["auth"])
     def login(payload: LoginRequest) -> dict[str, str]:
-        # TODO（后续 B8）：Demo 固定账号密码仅用于本地验收；预期改为可配置凭据与正式认证。
-        if not (
-            secrets.compare_digest(payload.username, "admin")
-            and secrets.compare_digest(payload.password, "admin")
+        # TODO（后续 B8）：固定测试账号仅用于多人验收；预期改为可配置凭据与正式认证。
+        if payload.username not in account_names or not secrets.compare_digest(
+            payload.password, payload.username
         ):
             raise HTTPException(status_code=401, detail="invalid username or password")
         token = secrets.token_urlsafe(32)
-        app.state.demo_tokens.add(token)
-        return {"access_token": token, "token_type": "bearer", "user_id": "admin"}
+        app.state.demo_tokens[token] = payload.username
+        return {"access_token": token, "token_type": "bearer", "user_id": payload.username}
 
     @app.get("/api/v1/progress", tags=["project"])
     def progress() -> dict[str, object]:
@@ -336,8 +343,12 @@ def create_app(
         return project.model_dump(mode="json")
 
     @app.get("/api/v1/projects", tags=["project"])
-    def list_projects() -> list[dict[str, object]]:
-        projects = ProjectRepository(_database(app)).list()
+    def list_projects(actor_id: str = Depends(_authenticated_actor)) -> list[dict[str, object]]:
+        database = _database(app)
+        allowed_ids = TeamRepository(database).list_project_ids_for_user(actor_id)
+        projects = [
+            project for project in ProjectRepository(database).list() if project.id in allowed_ids
+        ]
         return [project.model_dump(mode="json") for project in projects]
 
     @app.post("/api/v1/users", status_code=status.HTTP_201_CREATED, tags=["teams"])
@@ -411,17 +422,29 @@ def create_app(
     def list_sessions(
         project_id: str | None = Query(default=None),
         user_id: str | None = Query(default=None),
+        actor_id: str = Depends(_authenticated_actor),
     ) -> list[dict[str, object]]:
-        sessions = SessionRepository(_database(app)).list(project_id=project_id, user_id=user_id)
+        if user_id is not None and user_id != actor_id:
+            raise HTTPException(status_code=403, detail="cannot list another user's sessions")
+        database = _database(app)
+        shared_ids = TeamRepository(database).list_shared_session_ids(actor_id)
+        sessions = [
+            session
+            for session in SessionRepository(database).list(project_id=project_id)
+            if session.user_id == actor_id or session.id in shared_ids
+        ]
         return [session.model_dump(mode="json") for session in sessions]
 
     @app.get("/api/v1/sessions/{session_id}", tags=["sessions"])
-    def get_session(session_id: str) -> dict[str, object]:
+    def get_session(
+        session_id: str, actor_id: str = Depends(_authenticated_actor)
+    ) -> dict[str, object]:
         repository = SessionRepository(_database(app))
         try:
             snapshot = repository.snapshot(session_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        _require_session_access(app, snapshot.session, actor_id, SessionPermission.VIEW)
         return snapshot.model_dump(mode="json")
 
     @app.put("/api/v1/sessions/{session_id}/shares", tags=["teams"])
@@ -489,7 +512,15 @@ def create_app(
         return {"status": "accepted", "host_id": host_id}
 
     @app.post("/api/v1/sessions/{session_id}/messages", tags=["sessions"])
-    def append_session_message(session_id: str, message: ChatMessage) -> dict[str, object]:
+    def append_session_message(
+        session_id: str,
+        message: ChatMessage,
+        actor_id: str = Depends(_authenticated_actor),
+    ) -> dict[str, object]:
+        session = SessionRepository(_database(app)).get(session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail=f"session not found: {session_id}")
+        _require_session_access(app, session, actor_id, SessionPermission.COLLABORATE)
         try:
             stored = SessionRepository(_database(app)).append_message(session_id, message)
         except KeyError as exc:
@@ -497,9 +528,15 @@ def create_app(
         return stored.model_dump(mode="json")
 
     @app.post("/api/v1/sessions/{session_id}/attachments", status_code=status.HTTP_201_CREATED)
-    def create_attachment(session_id: str, payload: AttachmentCreateRequest) -> dict[str, str]:
-        if SessionRepository(_database(app)).get(session_id) is None:
+    def create_attachment(
+        session_id: str,
+        payload: AttachmentCreateRequest,
+        actor_id: str = Depends(_authenticated_actor),
+    ) -> dict[str, str]:
+        session = SessionRepository(_database(app)).get(session_id)
+        if session is None:
             raise HTTPException(status_code=404, detail=f"session not found: {session_id}")
+        _require_session_access(app, session, actor_id, SessionPermission.COLLABORATE)
         filename = Path(payload.filename).name
         if filename != payload.filename or not filename:
             raise HTTPException(
@@ -525,10 +562,15 @@ def create_app(
         }
 
     @app.post("/api/v1/sessions/{session_id}/runs", status_code=status.HTTP_201_CREATED)
-    async def create_run(session_id: str, payload: RunCreateRequest) -> dict[str, object]:
+    async def create_run(
+        session_id: str,
+        payload: RunCreateRequest,
+        actor_id: str = Depends(_authenticated_actor),
+    ) -> dict[str, object]:
         session = SessionRepository(_database(app)).get(session_id)
         if session is None:
             raise HTTPException(status_code=404, detail=f"session not found: {session_id}")
+        _require_session_access(app, session, actor_id, SessionPermission.COLLABORATE)
         SessionRepository(_database(app)).append_message(session_id, payload.message)
         request = RunRequest(
             thread_id=session.thread_id,
@@ -553,7 +595,8 @@ def create_app(
     @app.websocket("/api/v1/sessions/{session_id}/events")
     async def session_events(websocket: WebSocket, session_id: str) -> None:
         token = websocket.query_params.get("access_token")
-        if token not in app.state.demo_tokens:
+        actor_id = _actor_for_token(token)
+        if actor_id is None:
             await websocket.close(code=4401)
             return
         await websocket.accept()
@@ -561,6 +604,11 @@ def create_app(
         if session is None:
             await websocket.send_json({"type": "error", "detail": "session not found"})
             await websocket.close(code=4404)
+            return
+        try:
+            _require_session_access(app, session, actor_id, SessionPermission.COLLABORATE)
+        except HTTPException:
+            await websocket.close(code=4403)
             return
         try:
             while True:
@@ -601,6 +649,7 @@ def create_app(
     def summarize_session(
         session_id: str,
         max_characters: int = Query(default=4_000, ge=100, le=100_000),
+        actor_id: str = Depends(_authenticated_actor),
     ) -> dict[str, object]:
         from packages.memory import SessionMemoryService
 
@@ -608,6 +657,7 @@ def create_app(
         session = repository.get(session_id)
         if session is None:
             raise HTTPException(status_code=404, detail=f"session not found: {session_id}")
+        _require_session_access(app, session, actor_id, SessionPermission.COLLABORATE)
         summary = SessionMemoryService(repository).summarize(
             session.thread_id,
             max_characters=max_characters,
@@ -881,6 +931,22 @@ def _memory_store(app: FastAPI, scope: MemoryScope, owner_id: str) -> LongTermMe
         scope=scope,
         repository=MemoryRepository(database),
     )
+
+
+def _require_session_access(
+    app: FastAPI,
+    session: SessionRecord,
+    actor_id: str,
+    permission: SessionPermission,
+) -> None:
+    if session.user_id == actor_id:
+        return
+    try:
+        TeamService(TeamRepository(_database(app))).require_session_permission(
+            session.id, actor_id, permission
+        )
+    except AccessDeniedError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 app = create_app()

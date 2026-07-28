@@ -24,6 +24,10 @@ class TeamService:
         if membership is None or membership.role in {TeamRole.VIEWER}:
             raise AccessDeniedError("project write permission is required")
 
+    def require_project_read(self, project_id: str, actor_id: str) -> None:
+        if self.repository.get_project_member(project_id, actor_id) is None:
+            raise AccessDeniedError("project membership is required")
+
     def require_session_permission(
         self, session_id: str, actor_id: str, permission: SessionPermission
     ) -> None:

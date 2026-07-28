@@ -7,6 +7,14 @@ from fastapi.testclient import TestClient
 from apps.api.main import create_app
 
 
+def login_headers(client: TestClient, username: str) -> dict[str, str]:
+    response = client.post(
+        "/api/v1/auth/login", json={"username": username, "password": username}
+    )
+    assert response.status_code == 200
+    return {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+
 def test_b7_team_rbac_session_share_and_remote_host_declaration(tmp_path: Path) -> None:
     app = create_app(database_url="sqlite://", workspace_root=tmp_path)
     with TestClient(app) as client:
@@ -72,3 +80,49 @@ def test_b7_team_rbac_session_share_and_remote_host_declaration(tmp_path: Path) 
             headers={"X-CodeAssist-Host-Token": paired.json()["host_token"]},
         )
         assert heartbeat.json()["status"] == "accepted"
+
+
+def test_fixed_users_enforce_project_ownership_and_session_permissions(tmp_path: Path) -> None:
+    app = create_app(database_url="sqlite://", workspace_root=tmp_path)
+    with TestClient(app) as client:
+        admin1 = login_headers(client, "admin1")
+        admin2 = login_headers(client, "admin2")
+
+        project = client.post(
+            "/api/v1/projects",
+            json={"name": "admin1-project", "root_path": str(tmp_path)},
+            headers=admin1,
+        )
+        assert project.status_code == 201
+        assert client.get("/api/v1/projects", headers=admin2).json() == []
+
+        session = client.post(
+            "/api/v1/sessions", json={"thread_id": "admin1-thread"}, headers=admin1
+        ).json()
+        assert client.get(f"/api/v1/sessions/{session['id']}", headers=admin2).status_code == 403
+
+        shared = client.put(
+            f"/api/v1/sessions/{session['id']}/shares",
+            json={"recipient_id": "admin2", "permission": "view"},
+            headers=admin1,
+        )
+        assert shared.status_code == 200
+        assert client.get(f"/api/v1/sessions/{session['id']}", headers=admin2).status_code == 200
+        denied_write = client.post(
+            f"/api/v1/sessions/{session['id']}/messages",
+            json={"role": "user", "content": [{"type": "text", "text": "blocked"}]},
+            headers=admin2,
+        )
+        assert denied_write.status_code == 403
+
+        client.put(
+            f"/api/v1/sessions/{session['id']}/shares",
+            json={"recipient_id": "admin2", "permission": "collaborate"},
+            headers=admin1,
+        )
+        allowed_write = client.post(
+            f"/api/v1/sessions/{session['id']}/messages",
+            json={"role": "user", "content": [{"type": "text", "text": "allowed"}]},
+            headers=admin2,
+        )
+        assert allowed_write.status_code == 200

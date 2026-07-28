@@ -121,6 +121,14 @@ class TeamRepository:
             row = db.get(ProjectMemberRow, (project_id, user_id))
             return _project_member_from_row(row) if row else None
 
+    def list_project_ids_for_user(self, user_id: str) -> set[str]:
+        with self.database.session() as db:
+            return set(
+                db.scalars(
+                    select(ProjectMemberRow.project_id).where(ProjectMemberRow.user_id == user_id)
+                )
+            )
+
     def set_session_share(self, share: SessionShare) -> SessionShare:
         self._require_user(share.recipient_id)
         with self.database.session() as db:
@@ -141,6 +149,16 @@ class TeamRepository:
         with self.database.session() as db:
             row = db.get(SessionShareRow, (session_id, user_id))
             return _session_share_from_row(row) if row else None
+
+    def list_shared_session_ids(self, user_id: str) -> set[str]:
+        with self.database.session() as db:
+            return set(
+                db.scalars(
+                    select(SessionShareRow.session_id).where(
+                        SessionShareRow.recipient_id == user_id
+                    )
+                )
+            )
 
     def create_remote_host(self, host: RemoteHost) -> RemoteHost:
         with self.database.session() as db:
