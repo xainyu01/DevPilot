@@ -1,7 +1,7 @@
 # DevPilot 实施进度
 
 > 最后更新：2026-07-31（Asia/Shanghai）
-> 当前批次：B8，70%（真实 Agent 闭环纠偏与容器验收待完成）
+> 当前批次：B8-R1（供应商无关 Tool Calling）
 
 进度事实源为 [`progress.json`](progress.json)。
 
@@ -16,6 +16,17 @@
 | B6 | 已完成 | 100% | Windows-first 本地 Web 与平台端口 |
 | B7 | 已完成 | 100% | 用户、团队、RBAC、共享与远程 Host |
 | B8 | 进行中 | 70% | 稳定化、安全、真实 Agent 闭环、恢复、部署与发布 |
+| B8-R1 | 进行中 | 0% | ModelToolCall 契约、OpenAI/Anthropic 工具协议与 DeepSeek 真实冒烟 |
+
+## 下一阶段已确认
+
+用户已确认进入 B8-R1 真实 Agent 纠偏阶段。下一对话必须按照
+[完整改造计划](REAL_AGENT_IMPLEMENTATION_PLAN.md) 从 R1 连续执行到 R7：
+
+- 每个 R 子批次完成代码、测试、文档和验收后自动创建本地 Git 提交；
+- 每次提交后立即继续下一子批次，不等待用户逐批确认；
+- 最终必须完成 DeepSeek 自主 Tool Calling、空目录写项目和真实测试 E2E；
+- 默认不执行 `git push`，远程推送仍需用户明确授权。
 
 ## B8 已完成
 

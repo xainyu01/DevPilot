@@ -1,14 +1,15 @@
 {
   "overall_percent": 90,
-  "current_batch": "B8",
-  "next_action": "按 docs/REAL_AGENT_IMPLEMENTATION_PLAN.md 从 R1 到 R7 补齐模型原生 Tool Calling、Agent 循环、项目级工具、上下文、持久化、验证和真实 DeepSeek E2E。",
-  "updated_at": "2026-07-31T01:18:34+08:00",
+  "current_batch": "B8-R1",
+  "next_action": "立即执行 R1 供应商无关 Tool Calling，验收并提交后在同一对话自动继续 R2～R7，直到真实 DeepSeek E2E 完成。",
+  "updated_at": "2026-07-31T01:25:49+08:00",
   "constraints": [
     "普通文档放在 docs/",
     "Python 依赖只由 uv 管理并提交 uv.lock",
     "按计划书分批实施；每批可暂停、可验证、可交接",
     "高风险外部操作必须经策略、审批和审计",
-    "B7 固定用户 admin、admin1、admin2、admin3 在最终公开上线前保留，并通过 users、RBAC 和 JWT 正常链路授权"
+    "B7 固定用户 admin、admin1、admin2、admin3 在最终公开上线前保留，并通过 users、RBAC 和 JWT 正常链路授权",
+    "用户已确认进入 B8-R1 真实 Agent 纠偏阶段；下一对话按 R1～R7 连续执行，每个子批次验收后自动创建本地 Git 提交并继续，不自动 push"
   ],
   "batches": [
     {
@@ -129,6 +130,22 @@
         "真实 Agent E2E 已失败：Run 被标记 completed，但 Tool 事件、文件变化和测试执行均为 0",
         "当前工作站未安装 Docker、docker-compose 或 Podman，无法执行容器发布验收"
       ]
+    },
+    {
+      "id": "B8-R1",
+      "title": "B8 纠偏 R1：供应商无关 Tool Calling",
+      "status": "进行中",
+      "percent": 0,
+      "scope": ["ModelToolCall 契约", "OpenAI-compatible tools", "Anthropic tool_use", "流式参数合并", "DeepSeek 真实冒烟"],
+      "completed": ["用户已确认进入真实 Agent 纠偏阶段，完整 R1～R7 计划和执行提示词已经提交"],
+      "in_progress": ["准备实现供应商无关 Tool Calling 协议并接入 DeepSeek 两种兼容接口"],
+      "next_steps": [
+        "先补模型 Tool Call 契约和适配器失败测试",
+        "实现 OpenAI/Anthropic 非流式与流式 Tool Call 规范化",
+        "完成 DeepSeek 只读工具真实冒烟并创建 R1 提交",
+        "自动继续 R2 Agent 工具循环"
+      ],
+      "blockers": []
     }
   ]
 }
