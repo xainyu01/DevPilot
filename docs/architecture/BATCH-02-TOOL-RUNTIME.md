@@ -40,3 +40,25 @@ Shell 只接受参数数组，不接受需要二次解析的命令字符串；�
 - 数据库持久化、跨进程审批和长期审计存储属于 B3。
 - MCP 服务器发现和工具级远程授权属于 B2 的后续接入点，不能绕过 `ToolRuntime`。
 - Worktree 隔离与研发工作流属于 B4；本批次的 Git 工具不自动提交或推送。
+
+## B8-R3 编程工具与安全纠偏
+
+真实编程 Agent 现已增加：
+
+| 工具 | 风险与约束 |
+|---|---|
+| `file.list` | 有界树、条目和深度上限，不跟随项目外链接 |
+| `file.write` | 可恢复写入；create-only、显式 overwrite、SHA-256 并发保护、1MB 上限 |
+| `file.mkdir` | 可恢复写入；仅项目内目录 |
+| `file.delete` | 高风险审批；只删单文件、链接或空目录，禁止递归 |
+| `file.diff` / `workspace.status` | 相对 Run 初始快照的统一 Diff 和新增/修改/删除摘要 |
+| `repo.scan` | 返回相对路径的仓库画像，不向远程模型发送宿主绝对根路径 |
+| `test.run` | 只允许运行仓库发现或管理员明确允许的测试命令 |
+
+Shell/Test 均使用 argv，不接受 shell 字符串；路径参数再次经过项目边界校验，非零退出形成失败
+Tool Result 并保留 stdout/stderr。Windows 子进程被加入带 `KILL_ON_JOB_CLOSE` 的 Job Object，
+超时时终止整棵进程树。每个项目根使用进程内独占写租约，避免多个 Agent 同时写同一工作区。
+
+FastAPI 不再把 DevPilot 仓库根作为所有工具根。每个绑定项目的 Session Run 根据
+`ProjectRecord.root_path` 创建 ToolRuntime，并以项目成员角色计算 read/write/test/delete/shell/git
+能力；未绑定项目的普通对话没有文件工具。

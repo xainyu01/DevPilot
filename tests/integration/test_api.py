@@ -61,13 +61,15 @@ def test_local_web_first_conversation_and_runtime_logs(tmp_path: Path) -> None:
 
     with TestClient(web_app) as client:
         authenticate(client)
+        project_root = tmp_path / "registered-project"
+        project_root.mkdir()
         project = client.post(
             "/api/v1/projects",
-            json={"name": "first-project", "root_path": "."},
+            json={"name": "first-project", "root_path": str(project_root)},
         )
         assert project.status_code == 201
         project_payload = project.json()
-        assert Path(project_payload["root_path"]) == tmp_path.resolve()
+        assert Path(project_payload["root_path"]) == project_root.resolve()
 
         session = client.post(
             "/api/v1/sessions",
@@ -84,6 +86,9 @@ def test_local_web_first_conversation_and_runtime_logs(tmp_path: Path) -> None:
         )
         assert run.status_code == 201
         assert run.json()["final_text"].startswith("Fake response")
+        run_id = run.json()["context"]["run_id"]
+        bound_runtime = web_app.state.agent_runtimes[("first-web-thread", run_id)]
+        assert bound_runtime.tool_runtime.workspace_root == project_root.resolve()
 
         logs = client.get("/api/v1/runtime/logs").json()
         events = [item["event"] for item in logs]

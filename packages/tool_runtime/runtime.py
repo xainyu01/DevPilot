@@ -6,6 +6,7 @@ import asyncio
 import json
 import time
 from pathlib import Path
+from threading import Lock, RLock
 from typing import Any
 
 from packages.contracts import (
@@ -14,11 +15,13 @@ from packages.contracts import (
     AuditRecord,
     ToolCall,
     ToolResult,
+    ToolRisk,
 )
 
 from .approvals import ApprovalStore
 from .audit import AuditLog
 from .context import ToolExecutionContext
+from .errors import ToolCommandError
 from .policy import PolicyEngine
 from .registry import ToolRegistry
 
@@ -39,7 +42,7 @@ class ToolRuntime:
         if registry is None:
             from .tools import create_default_registry
 
-            registry = create_default_registry()
+            registry = create_default_registry(self.workspace_root)
         self.registry = registry
         self.policy = policy or PolicyEngine()
         self.approvals = approvals or ApprovalStore()
@@ -167,6 +170,23 @@ class ToolRuntime:
             outcome="started",
             detail={"call_id": call.call_id},
         )
+        write_lease = None
+        if risk != ToolRisk.READ_ONLY:
+            with self._lease_guard:
+                write_lease = self._write_leases.setdefault(
+                    str(current.workspace_root.resolve()).casefold(),
+                    Lock(),
+                )
+            if not write_lease.acquire(blocking=False):
+                return ToolResult(
+                    call_id=call.call_id,
+                    tool_name=call.name,
+                    status="failed",
+                    error={
+                        "code": "workspace_write_locked",
+                        "message": "another writer currently owns this workspace",
+                    },
+                )
         try:
             output = await asyncio.wait_for(
                 tool.execute(call.arguments, current), timeout=definition.timeout_seconds
@@ -211,6 +231,24 @@ class ToolRuntime:
                 error={"code": "tool_timeout", "message": message},
                 duration_ms=elapsed,
             )
+        except ToolCommandError as exc:
+            elapsed = int((time.perf_counter() - started) * 1000)
+            self._audit(
+                current,
+                event_type="tool.failed",
+                tool_name=call.name,
+                risk=risk,
+                outcome=exc.code,
+                detail={"call_id": call.call_id, "duration_ms": elapsed},
+            )
+            return ToolResult(
+                call_id=call.call_id,
+                tool_name=call.name,
+                status="failed",
+                output=exc.output,
+                error={"code": exc.code, "message": str(exc)},
+                duration_ms=elapsed,
+            )
         except Exception as exc:
             elapsed = int((time.perf_counter() - started) * 1000)
             self._audit(
@@ -228,6 +266,9 @@ class ToolRuntime:
                 error={"code": "tool_execution_error", "message": str(exc)},
                 duration_ms=elapsed,
             )
+        finally:
+            if write_lease is not None:
+                write_lease.release()
 
     def decide_approval(
         self,
@@ -274,3 +315,5 @@ class ToolRuntime:
                 detail=detail,
             )
         )
+    _lease_guard = RLock()
+    _write_leases: dict[str, Lock] = {}

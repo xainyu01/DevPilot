@@ -295,7 +295,7 @@ async def test_high_risk_tool_pauses_graph_and_approval_resumes_it(tmp_path: Pat
             "tool_calls": [
                 ToolCall(
                     name="shell.exec",
-                    arguments={"command": [sys.executable, "-c", "print('ok')"]},
+                    arguments={"command": [sys.executable, "--version"]},
                 )
             ],
             "metadata": {
@@ -467,7 +467,7 @@ async def test_model_generated_high_risk_call_resumes_same_loop(tmp_path: Path) 
                     model_call(
                         "shell-1",
                         "shell.exec",
-                        command=[sys.executable, "-c", "print('ok')"],
+                        command=[sys.executable, "--version"],
                     )
                 ],
             ),

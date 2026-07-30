@@ -1,8 +1,8 @@
 {
-  "overall_percent": 93,
-  "current_batch": "B8-R3",
-  "next_action": "执行 R3 项目级编程工具与安全边界，验收并提交后继续 R4～R7。",
-  "updated_at": "2026-07-31T02:50:00+08:00",
+  "overall_percent": 95,
+  "current_batch": "B8-R4",
+  "next_action": "执行 R4 上下文组装、记忆和真实项目绑定，验收并提交后继续 R5～R7。",
+  "updated_at": "2026-07-31T03:30:00+08:00",
   "constraints": [
     "普通文档放在 docs/",
     "Python 依赖只由 uv 管理并提交 uv.lock",
@@ -104,7 +104,7 @@
       "id": "B8",
       "title": "阶段 8：稳定化与发布",
       "status": "进行中",
-      "percent": 78,
+      "percent": 82,
       "scope": ["安全加固", "恢复", "迁移", "备份", "真实 Agent 闭环", "Docker 发布"],
       "completed": [
         "固定 B7 用户写入 users 表，并改用可跨重启验证的 HS256 JWT",
@@ -116,14 +116,15 @@
         "完成多组模型连接、Coding Plan、环境变量回退、Web 配置和受限自动选模扩展",
         "通过 83 项测试、设置/凭据模块 90% 覆盖率、Ruff、Vite build 和 DeepSeek 双协议最小真实调用",
         "完成供应商无关 ModelToolCall、严格 JSON Schema 校验、OpenAI/Anthropic 工具协议和流式参数合并；DeepSeek 双协议均真实产生 file.read Tool Call",
-        "完成 LangGraph 模型—工具—结果—模型循环、服务器硬预算、重复/无进展终止和审批 checkpoint 恢复；DeepSeek 真实只读 Agent 闭环成功"
+        "完成 LangGraph 模型—工具—结果—模型循环、服务器硬预算、重复/无进展终止和审批 checkpoint 恢复；DeepSeek 真实只读 Agent 闭环成功",
+        "完成项目级文件创建/写入/删除/Diff/状态/扫描/测试工具、hash 保护、Shell 路径校验和 Windows Job Object 进程树终止；DeepSeek 真实写工具冒烟成功"
       ],
       "in_progress": [
-        "实现项目级写入、目录、Diff、状态、扫描和专用测试工具，并强化 Shell 路径/进程树边界",
+        "组装会话、项目规则、仓库画像、用户变化和记忆上下文，并统一 REST/WebSocket RunCoordinator",
         "在 Docker 可用的环境执行 Compose 配置和容器启动健康检查"
       ],
       "next_steps": [
-        "执行 docs/REAL_AGENT_IMPLEMENTATION_PLAN.md 的 R3～R7",
+        "执行 docs/REAL_AGENT_IMPLEMENTATION_PLAN.md 的 R4～R7",
         "使用 DeepSeek 通过真实 FastAPI/WebSocket 在空目录自主创建 Event Lens 项目并运行测试",
         "运行 docker compose config",
         "运行 docker compose up --build -d 并验证 /healthz 与 /readyz"
@@ -171,15 +172,34 @@
     {
       "id": "B8-R3",
       "title": "B8 纠偏 R3：项目级编程工具与安全边界",
+      "status": "已完成",
+      "percent": 100,
+      "scope": ["文件创建与目录", "Diff/状态", "仓库扫描", "专用测试", "Shell 路径", "进程树", "项目作用域"],
+      "completed": [
+        "新增 file.list/write/mkdir/delete/diff、workspace.status、repo.scan 和 test.run",
+        "file.write 支持 create_only、overwrite、expected_sha256 和 1MB 上限",
+        "空目录嵌套创建、路径穿越、链接逃逸、保护目录和非递归删除边界通过测试",
+        "test.run 只执行发现或管理员允许命令，非零退出与超时返回失败证据",
+        "Windows 子进程由 Job Object 约束，超时后子进程树不残留",
+        "Session Run 的 ToolRuntime 精确绑定注册 ProjectRecord.root_path 并按 RBAC 下发能力",
+        "DeepSeek 真实自主调用 file.mkdir/file.write/file.read/workspace.status 创建隔离证明文件"
+      ],
+      "in_progress": [],
+      "next_steps": [],
+      "blockers": []
+    },
+    {
+      "id": "B8-R4",
+      "title": "B8 纠偏 R4：项目上下文组装与记忆",
       "status": "进行中",
       "percent": 0,
-      "scope": ["文件创建与目录", "Diff/状态", "仓库扫描", "专用测试", "Shell 路径", "进程树", "项目作用域"],
+      "scope": ["ContextAssembler", "会话历史", "项目规则", "仓库画像", "工作区变化", "记忆", "Token 裁剪", "统一协调器"],
       "completed": [],
-      "in_progress": ["实现新编程工具并强化 Windows 路径、链接和子进程边界"],
+      "in_progress": ["实现供应商无关 ContextAssembler 并统一 REST/WebSocket 创建逻辑"],
       "next_steps": [
-        "补齐空目录创建、hash 并发保护、路径逃逸、非零测试和超时进程树测试",
-        "把 ToolRuntime 根目录绑定到注册项目",
-        "验收并创建 R3 提交后自动继续 R4"
+        "补齐规则、第二轮历史、项目根一致、大仓库预算和未授权访问测试",
+        "接入用户/项目记忆与工作区状态",
+        "验收并创建 R4 提交后自动继续 R5"
       ],
       "blockers": []
     }

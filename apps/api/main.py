@@ -292,6 +292,7 @@ def create_app(
     app.state.database = database
     app.state.workspace_root = workspace
     app.state.agent_runtime = AgentRuntime(_model_gateway(local_settings))
+    app.state.agent_runtimes: dict[tuple[str, str], AgentRuntime] = {}
     app.state.runtime_logs: list[dict[str, object]] = []
     app.state.authentication = authentication
     app.state.auth_settings = resolved_auth_settings
@@ -488,6 +489,7 @@ def create_app(
         app.state.settings_store.save(updated)
         app.state.local_settings = updated
         app.state.agent_runtime = AgentRuntime(_model_gateway(updated))
+        app.state.agent_runtimes.clear()
         app.state.last_user_activity = time.monotonic()
         return _public_runtime_settings(updated)
 
@@ -823,13 +825,23 @@ def create_app(
         except ModelChoiceError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         SessionRepository(_database(app)).append_message(session_id, payload.message)
+        run_id = payload.run_id or str(uuid4())
+        runtime, capabilities = _runtime_for_session(
+            app,
+            session,
+            actor_id,
+            run_id=run_id,
+        )
         request = RunRequest(
             thread_id=session.thread_id,
-            run_id=payload.run_id or str(uuid4()),
+            run_id=run_id,
             provider=selection.target.endpoint_id,
             model=selection.target.model,
             messages=[payload.message],
             metadata={
+                "actor_id": actor_id,
+                "project_id": session.project_id,
+                "capabilities": sorted(capabilities),
                 "model_selection": {
                     "mode": selection.mode,
                     "reason": selection.reason,
@@ -847,7 +859,7 @@ def create_app(
         )
         app.state.active_run_count += 1
         try:
-            result = await _runtime(app).run(request)
+            result = await runtime.run(request)
         finally:
             app.state.active_run_count -= 1
         if result.final_text:
@@ -886,13 +898,23 @@ def create_app(
                 app.state.last_user_activity = time.monotonic()
                 selection = await _select_runtime_model(app, payload)
                 SessionRepository(_database(app)).append_message(session_id, payload.message)
+                run_id = payload.run_id or str(uuid4())
+                runtime, capabilities = _runtime_for_session(
+                    app,
+                    session,
+                    actor_id,
+                    run_id=run_id,
+                )
                 request = RunRequest(
                     thread_id=session.thread_id,
-                    run_id=payload.run_id or str(uuid4()),
+                    run_id=run_id,
                     provider=selection.target.endpoint_id,
                     model=selection.target.model,
                     messages=[payload.message],
                     metadata={
+                        "actor_id": actor_id,
+                        "project_id": session.project_id,
+                        "capabilities": sorted(capabilities),
                         "model_selection": {
                             "mode": selection.mode,
                             "reason": selection.reason,
@@ -911,7 +933,7 @@ def create_app(
                 final_text = None
                 app.state.active_run_count += 1
                 try:
-                    async for event in _runtime(app).stream(request):
+                    async for event in runtime.stream(request):
                         await websocket.send_json(event.model_dump(mode="json"))
                         if event.type.value == "run.completed":
                             final_text = event.data.get("text")
@@ -1562,6 +1584,45 @@ async def _idle_shutdown_monitor(app: FastAPI) -> None:
 
 def _runtime(app: FastAPI) -> AgentRuntime:
     return app.state.agent_runtime
+
+
+def _runtime_for_session(
+    app: FastAPI,
+    session: SessionRecord,
+    actor_id: str,
+    *,
+    run_id: str,
+) -> tuple[AgentRuntime, set[str]]:
+    """Bind one coding runtime to the registered project, never the DevPilot repo."""
+    if session.project_id is None:
+        return _runtime(app), set()
+    project = _require_project_access(
+        app,
+        session.project_id,
+        actor_id,
+        write=False,
+    )
+    membership = TeamRepository(_database(app)).get_project_member(
+        session.project_id,
+        actor_id,
+    )
+    capabilities = {"workspace.read", "git.read"}
+    if membership is not None and membership.role != TeamRole.VIEWER:
+        capabilities.update(
+            {
+                "workspace.write",
+                "workspace.delete",
+                "test.execute",
+                "shell.execute",
+                "git.write",
+            }
+        )
+    runtime = AgentRuntime(
+        _model_gateway(app.state.local_settings),
+        tool_runtime=ToolRuntime(Path(project.root_path)),
+    )
+    app.state.agent_runtimes[(session.thread_id, run_id)] = runtime
+    return runtime, capabilities
 
 
 def _memory_store(app: FastAPI, scope: MemoryScope, owner_id: str) -> LongTermMemoryStore:
