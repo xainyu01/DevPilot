@@ -40,6 +40,15 @@ type ModelOptions = {
   agent_model_policy: ModelPolicy;
 };
 type DirectoryListing = { path: string; parent_path: string | null; directories: { name: string; path: string }[] };
+type RunEvent = {
+  event_id: string;
+  sequence: number;
+  run_id: string;
+  type: string;
+  status: string;
+  node?: string | null;
+  data: Record<string, unknown>;
+};
 type Theme = "light" | "dark";
 type Language = "zh" | "en";
 type SettingsSection = "appearance" | "runtime" | "account";
@@ -259,6 +268,40 @@ function relativeTime(value: string | undefined, language: Language) {
   return decodeEscapedText(language === "zh" ? `${days} \\u5929\\u524d` : `${days}d ago`);
 }
 
+function RunEventCard({
+  event,
+  onApproval,
+}: {
+  event: RunEvent;
+  onApproval: (requestId: string, approved: boolean) => void;
+}) {
+  if (event.type === "model.delta" || event.type === "node.started" || event.type === "node.completed") return null;
+  const titles: Record<string, string> = {
+    "run.started": "Run started",
+    "plan.created": "Plan",
+    "model.output": "Model call",
+    "tool.requested": "Tool call",
+    "tool.output": "Tool result",
+    "approval.required": "Approval required",
+    "approval.decided": "Approval decided",
+    "run.paused": "Run paused",
+    "run.resumed": "Run resumed",
+    "run.completed": "Run completed",
+    "run.failed": "Run failed",
+    "run.cancelled": "Run cancelled",
+  };
+  const approval = event.data.approval as { request_id?: string; tool_name?: string; reason?: string; arguments?: Record<string, unknown> } | undefined;
+  const usage = event.data.usage as { input_tokens?: number; output_tokens?: number; total_tokens?: number } | undefined;
+  return <article className={`run-event-card run-event-${event.status}`}>
+    <header><strong>{titles[event.type] || event.type}</strong><span>#{event.sequence} · {event.status}</span></header>
+    {event.type === "plan.created" && <ol>{((event.data.steps as string[]) || []).map((step) => <li key={step}>{step}</li>)}</ol>}
+    {event.type === "model.output" && <div className="run-event-grid"><span>{String(event.data.provider || "")} / {String(event.data.model || "")}</span><span>iteration {String(event.data.iteration || "")}</span>{usage && <span>{usage.input_tokens || 0} in · {usage.output_tokens || 0} out</span>}</div>}
+    {event.type === "tool.requested" && <><code>{String(event.data.tool_name || "")}</code><pre>{JSON.stringify(event.data.arguments || {}, null, 2)}</pre></>}
+    {event.type === "tool.output" && <><div className="run-event-grid"><code>{String(event.data.tool_name || "")}</code><span>{String(event.data.status || "")}</span></div><pre>{String(event.data.output || JSON.stringify(event.data.error || {}))}</pre></>}
+    {approval && <div className="approval-card"><strong>{approval.tool_name}</strong><p>{approval.reason}</p><pre>{JSON.stringify(approval.arguments || {}, null, 2)}</pre><div><button className="secondary-button" onClick={() => approval.request_id && onApproval(approval.request_id, false)}>Reject</button><button className="primary-button" onClick={() => approval.request_id && onApproval(approval.request_id, true)}>Approve once</button></div></div>}
+  </article>;
+}
+
 function App() {
   const [token, setToken] = useState(() => localStorage.getItem("devpilot_access_token") || "");
   const [currentUser, setCurrentUser] = useState(() => localStorage.getItem("devpilot_user_id") || "");
@@ -299,6 +342,8 @@ function App() {
   const [isInspectorOpen, setIsInspectorOpen] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [runEvents, setRunEvents] = useState<RunEvent[]>([]);
+  const [activeRunId, setActiveRunId] = useState<string>();
   const searchInputRef = useRef<HTMLInputElement>(null);
   const text = useMemo(() => decodeEscapedText(copy[language]), [language]);
 
@@ -313,6 +358,7 @@ function App() {
     const query = searchQuery.trim().toLowerCase();
     return sessions.filter((session) => (selectedProject === "all" || session.project_id === selectedProject) && (!query || (session.title || session.thread_id).toLowerCase().includes(query)));
   }, [searchQuery, selectedProject, sessions]);
+  const latestRunStatus = runEvents.at(-1)?.status;
 
   useEffect(() => { document.documentElement.dataset.theme = theme; document.documentElement.lang = language === "zh" ? "zh-CN" : "en"; localStorage.setItem("devpilot_theme", theme); localStorage.setItem("devpilot_language", language); }, [language, theme]);
   useEffect(() => { if (isSearchOpen) searchInputRef.current?.focus(); }, [isSearchOpen]);
@@ -342,6 +388,13 @@ function App() {
 
   useEffect(() => { if (token) void refresh(); }, [token, currentUser]);
   useEffect(() => { if (!selectedSession) { setSnapshot(undefined); return; } void api<Snapshot>(`/api/v1/sessions/${selectedSession}`).then(setSnapshot).catch((cause: Error) => setError(cause.message)); }, [selectedSession]);
+  useEffect(() => {
+    if (!selectedSession) { setRunEvents([]); setActiveRunId(undefined); return; }
+    const runId = localStorage.getItem(`devpilot_run_${selectedSession}`) || undefined;
+    setActiveRunId(runId);
+    if (runId) void api<RunEvent[]>(`/api/v1/runs/${runId}/events`).then(setRunEvents).catch(() => setRunEvents([]));
+    else setRunEvents([]);
+  }, [selectedSession]);
 
   const login = async (event: FormEvent) => { event.preventDefault(); try { const result = await api<LoginResponse>("/api/v1/auth/login", { method: "POST", body: JSON.stringify({ username, password }) }); localStorage.setItem("devpilot_access_token", result.access_token); localStorage.setItem("devpilot_user_id", result.user_id); setToken(result.access_token); setCurrentUser(result.user_id); setPassword(""); setError(undefined); } catch (cause) { setError(cause instanceof Error ? cause.message : "Login failed"); } };
   const createSession = async () => { try { const projectId = selectedProject === "all" ? projects[0]?.id : selectedProject; const session = await api<Session>("/api/v1/sessions", { method: "POST", body: JSON.stringify({ thread_id: crypto.randomUUID(), title: text.newConversation, project_id: projectId }) }); setSessions((items) => [session, ...items]); setSelectedSession(session.id); setSnapshot({ messages: [], session }); setError(undefined); } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not create conversation"); } };
@@ -357,18 +410,24 @@ function App() {
         : { model_mode: "manual", ...targetFromKey(runModelKey) };
     setMessage("");
     setIsSending(true);
+    const runId = crypto.randomUUID();
+    setActiveRunId(runId);
+    setRunEvents([]);
+    localStorage.setItem(`devpilot_run_${activeSession.id}`, runId);
     const url = new URL(`/api/v1/sessions/${activeSession.id}/events`, window.location.href);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     url.searchParams.set("access_token", token);
     const socket = new WebSocket(url);
     socket.onopen = () => socket.send(JSON.stringify({
       message: { role: "user", content: [{ type: "text", text: content }] },
+      run_id: runId,
       ...modelRequest,
     }));
     socket.onmessage = (item) => {
-      const eventData = JSON.parse(item.data) as { type: string; detail?: string };
+      const eventData = JSON.parse(item.data) as RunEvent & { detail?: string };
       if (eventData.type === "error") setError(eventData.detail || "Run failed");
-      if (["run.completed", "run.failed", "run.cancelled", "error"].includes(eventData.type)) {
+      if (eventData.event_id) setRunEvents((items) => items.some((entry) => entry.event_id === eventData.event_id) ? items : [...items, eventData]);
+      if (["run.completed", "run.failed", "run.cancelled", "run.paused", "error"].includes(eventData.type)) {
         setIsSending(false);
         socket.close();
         void api<Snapshot>(`/api/v1/sessions/${activeSession.id}`).then(setSnapshot);
@@ -378,6 +437,24 @@ function App() {
       setIsSending(false);
       setError("Conversation connection failed");
     };
+  };
+  const decideApproval = async (requestId: string, approved: boolean) => {
+    if (!activeRunId || !activeSession) return;
+    setIsSending(true);
+    try {
+      await api(`/api/v1/runs/${activeRunId}/approvals/${requestId}`, { method: "POST", body: JSON.stringify({ approved, scope: "once" }) });
+      const [events, nextSnapshot] = await Promise.all([api<RunEvent[]>(`/api/v1/runs/${activeRunId}/events`), api<Snapshot>(`/api/v1/sessions/${activeSession.id}`)]);
+      setRunEvents(events); setSnapshot(nextSnapshot); setError(undefined);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Approval failed"); }
+    finally { setIsSending(false); }
+  };
+  const controlRun = async (action: "cancel" | "resume") => {
+    if (!activeRunId || !activeSession) return;
+    try {
+      await api(`/api/v1/runs/${activeRunId}/${action}`, { method: "POST", body: action === "resume" ? JSON.stringify({ value: { action: "continue" } }) : undefined });
+      const [events, nextSnapshot] = await Promise.all([api<RunEvent[]>(`/api/v1/runs/${activeRunId}/events`), api<Snapshot>(`/api/v1/sessions/${activeSession.id}`)]);
+      setRunEvents(events); setSnapshot(nextSnapshot); setIsSending(false); setError(undefined);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : `Unable to ${action} run`); }
   };
   const saveSettings = async (event: FormEvent) => {
     event.preventDefault();
@@ -438,7 +515,7 @@ function App() {
     </aside>
     <section className="workspace"><header className="topbar"><div className="topbar-context"><button className="mobile-menu-button icon-button" onClick={() => setIsSidebarCollapsed((value) => !value)} aria-label="Toggle sidebar"><Icon name="menu" size={19} /></button><div className="breadcrumb"><span className="breadcrumb-muted">{text.workspace}</span><Icon name="chevron-right" size={14} /><strong>{activeProject?.name || (selectedProject === "all" ? text.allProjects : projects.find((project) => project.id === selectedProject)?.name || text.projects)}</strong></div></div><div className="topbar-actions"><span className="connection-status"><i />{text.connected}</span><button className="topbar-button" onClick={() => setTheme((value) => value === "light" ? "dark" : "light")} title={theme === "light" ? text.switchToDark : text.switchToLight}><Icon name={theme === "light" ? "moon" : "sun"} size={17} /><span>{theme === "light" ? text.dark : text.light}</span></button><button className={`topbar-button ${isInspectorOpen ? "active" : ""}`} onClick={() => setIsInspectorOpen((value) => !value)}><Icon name="sliders" size={17} /><span>{text.context}</span></button><button className="icon-button" onClick={() => void refresh()} aria-label={text.refresh}><Icon name="refresh" size={17} /></button></div></header>
       {error && <div className="error-banner"><span>{error}</span><button className="icon-button" onClick={() => setError(undefined)} aria-label={text.close}><Icon name="x" size={15} /></button></div>}
-      <div className="workspace-body"><section className="conversation-pane">{activeSession ? <><div className="conversation-header content-width"><div><p className="eyebrow">{activeProject?.name || text.personalSpace}</p><h1>{activeSession.title || text.untitled}</h1></div><button className="icon-button" aria-label="More conversation actions"><Icon name="more" size={19} /></button></div><div className="messages-scroll"><div className="messages content-width">{!snapshot?.messages.length && <div className="conversation-start"><span className="brand-mark brand-mark-soft"><Icon name="spark" size={18} /></span><h2>{text.readyTitle}</h2><p>{text.readyDescription}</p></div>}{snapshot?.messages.map((item) => <article className="message-row" key={item.id}><span className={`message-avatar ${item.message.role === "user" ? "message-avatar-user" : "message-avatar-agent"}`}>{item.message.role === "user" ? getInitials(displayName) : <Icon name="spark" size={15} />}</span><div className="message-content"><div className="message-meta"><strong>{item.message.role === "user" ? displayName : "DevPilot"}</strong><span>{item.message.role === "user" ? text.you : text.agent}</span></div>{item.message.content.map((block, index) => <p key={`${item.id}-${index}`}>{blockText(block)}</p>)}</div></article>)}{isSending && <article className="message-row"><span className="message-avatar message-avatar-agent"><Icon name="spark" size={15} /></span><div className="message-content"><div className="message-meta"><strong>DevPilot</strong><span>{text.thinking}</span></div><div className="thinking-dots"><i /><i /><i /></div></div></article>}</div></div><form className="composer-wrap content-width" onSubmit={send}><div className="composer"><textarea aria-label="Message" placeholder={text.messagePlaceholder} value={message} onChange={(event) => setMessage(event.target.value)} onKeyDown={handleComposerKeyDown} rows={1} /><div className="composer-toolbar"><button type="button" className="composer-tool" aria-label="Add attachment"><Icon name="paperclip" size={17} /></button><select className="composer-model-select" aria-label={text.modelName} value={runModelKey} onChange={(event) => setRunModelKey(event.target.value)}><option value="policy">{text.followPolicy}</option><option value="auto">{text.autoModel}</option>{allowedRunModels.map((target) => <option key={targetKey(target)} value={targetKey(target)}>{target.endpoint_name} / {target.model}</option>)}</select><span className="composer-hint">{text.sendHint}</span><button className="send-button" disabled={!message.trim() || isSending} aria-label="Send message"><Icon name="arrow-up" size={17} /></button></div></div><p className="composer-disclaimer">{text.disclaimer}</p></form></> : <div className="empty-workspace content-width"><div className="welcome-mark"><Icon name="spark" size={25} /></div><p className="eyebrow">DEV PILOT WORKSPACE</p><h1>{text.hello}, {displayName}</h1><p className="welcome-copy">{text.welcomeDescription}</p><div className="starter-grid">{text.starterCards.map((item, index) => <button className="starter-card" key={item[0]} onClick={() => { if (index === 3 && sessions[0]) setSelectedSession(sessions[0].id); else void createSession(); }}><span className="starter-icon"><Icon name={starterIcons[index]} size={18} /></span><span><strong>{item[0]}</strong><small>{item[1]}</small></span><Icon name="chevron-right" size={16} /></button>)}</div><button className="primary-button welcome-button" onClick={() => void createSession()}><Icon name="plus" size={17} />{text.newConversation}</button></div>}</section>
+      <div className="workspace-body"><section className="conversation-pane">{activeSession ? <><div className="conversation-header content-width"><div><p className="eyebrow">{activeProject?.name || text.personalSpace}</p><h1>{activeSession.title || text.untitled}</h1></div><button className="icon-button" aria-label="More conversation actions"><Icon name="more" size={19} /></button></div><div className="messages-scroll"><div className="messages content-width">{!snapshot?.messages.length && <div className="conversation-start"><span className="brand-mark brand-mark-soft"><Icon name="spark" size={18} /></span><h2>{text.readyTitle}</h2><p>{text.readyDescription}</p></div>}{snapshot?.messages.map((item) => <article className="message-row" key={item.id}><span className={`message-avatar ${item.message.role === "user" ? "message-avatar-user" : "message-avatar-agent"}`}>{item.message.role === "user" ? getInitials(displayName) : <Icon name="spark" size={15} />}</span><div className="message-content"><div className="message-meta"><strong>{item.message.role === "user" ? displayName : "DevPilot"}</strong><span>{item.message.role === "user" ? text.you : text.agent}</span></div>{item.message.content.map((block, index) => <p key={`${item.id}-${index}`}>{blockText(block)}</p>)}</div></article>)}{runEvents.length > 0 && <section className="run-timeline">{runEvents.map((runEvent) => <RunEventCard key={runEvent.event_id} event={runEvent} onApproval={(requestId, approved) => void decideApproval(requestId, approved)} />)}{isSending && <div className="run-controls"><button className="secondary-button" onClick={() => void controlRun("cancel")}>Cancel run</button></div>}{latestRunStatus === "paused" && !runEvents.some((item) => item.type === "approval.required" && item.status === "running") && <div className="run-controls"><button className="primary-button" onClick={() => void controlRun("resume")}>Continue</button></div>}</section>}{isSending && <article className="message-row"><span className="message-avatar message-avatar-agent"><Icon name="spark" size={15} /></span><div className="message-content"><div className="message-meta"><strong>DevPilot</strong><span>{text.thinking}</span></div><div className="thinking-dots"><i /><i /><i /></div></div></article>}</div></div><form className="composer-wrap content-width" onSubmit={send}><div className="composer"><textarea aria-label="Message" placeholder={text.messagePlaceholder} value={message} onChange={(event) => setMessage(event.target.value)} onKeyDown={handleComposerKeyDown} rows={1} /><div className="composer-toolbar"><button type="button" className="composer-tool" aria-label="Add attachment"><Icon name="paperclip" size={17} /></button><select className="composer-model-select" aria-label={text.modelName} value={runModelKey} onChange={(event) => setRunModelKey(event.target.value)}><option value="policy">{text.followPolicy}</option><option value="auto">{text.autoModel}</option>{allowedRunModels.map((target) => <option key={targetKey(target)} value={targetKey(target)}>{target.endpoint_name} / {target.model}</option>)}</select><span className="composer-hint">{text.sendHint}</span><button className="send-button" disabled={!message.trim() || isSending} aria-label="Send message"><Icon name="arrow-up" size={17} /></button></div></div><p className="composer-disclaimer">{text.disclaimer}</p></form></> : <div className="empty-workspace content-width"><div className="welcome-mark"><Icon name="spark" size={25} /></div><p className="eyebrow">DEV PILOT WORKSPACE</p><h1>{text.hello}, {displayName}</h1><p className="welcome-copy">{text.welcomeDescription}</p><div className="starter-grid">{text.starterCards.map((item, index) => <button className="starter-card" key={item[0]} onClick={() => { if (index === 3 && sessions[0]) setSelectedSession(sessions[0].id); else void createSession(); }}><span className="starter-icon"><Icon name={starterIcons[index]} size={18} /></span><span><strong>{item[0]}</strong><small>{item[1]}</small></span><Icon name="chevron-right" size={16} /></button>)}</div><button className="primary-button welcome-button" onClick={() => void createSession()}><Icon name="plus" size={17} />{text.newConversation}</button></div>}</section>
         {isInspectorOpen && <aside className="inspector"><div className="inspector-header"><div><p className="eyebrow">WORKSPACE</p><h2>{text.context}</h2></div><button className="icon-button" onClick={() => setIsInspectorOpen(false)} aria-label={text.close}><Icon name="x" size={17} /></button></div><div className="inspector-body"><section className="inspector-section"><div className="inspector-section-title"><Icon name="folder" size={16} /><span>{text.projects}</span></div>{activeProject ? <div className="context-card"><strong>{activeProject.name}</strong><small>{activeProject.root_path}</small><span className="context-status"><i />{text.connected}</span></div> : <div className="context-card context-empty">{text.projectDescription}</div>}</section><section className="inspector-section"><div className="inspector-section-title"><Icon name="spark" size={16} /><span>{text.modelName}</span></div><div className="context-row"><span>{text.modelProvider}</span><strong>{settings?.model_provider || "Default"}</strong></div><div className="context-row"><span>{text.modelName}</span><strong>{settings?.model_name || "Auto"}</strong></div></section><section className="inspector-section"><div className="inspector-section-title"><Icon name="code" size={16} /><span>{text.context}</span></div><div className="context-row"><span>Messages</span><strong>{snapshot?.messages.length || 0}</strong></div><div className="context-row"><span>Thread ID</span><strong className="mono">{activeSession?.thread_id.slice(0, 12) || "-"}</strong></div></section></div></aside>}
       </div>
     </section>

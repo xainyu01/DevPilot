@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 
+import aiosqlite
 from fastapi import (
     Depends,
     FastAPI,
@@ -25,6 +26,7 @@ from fastapi import (
     WebSocketDisconnect,
     status,
 )
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
@@ -38,6 +40,8 @@ from packages.agent_core import (
     RunCoordinator,
 )
 from packages.contracts import (
+    ApprovalRequest,
+    ApprovalScope,
     ChatMessage,
     IssueContext,
     MemoryScope,
@@ -46,6 +50,8 @@ from packages.contracts import (
     ProjectRecord,
     RemoteHost,
     ReviewStatus,
+    RunRequest,
+    RunStatus,
     SessionPermission,
     SessionRecord,
     SessionShare,
@@ -77,11 +83,16 @@ from packages.model_gateway import (
     OpenAIAdapter,
 )
 from packages.persistence import (
+    ApprovalRepository,
+    AuditRepository,
+    CheckpointRepository,
     Database,
     MemoryRepository,
+    PersistentApprovalStore,
     ProjectRepository,
     RepositoryProfileRepository,
     RuleRepository,
+    RunRepository,
     SessionRepository,
     TeamRepository,
     WorkflowRepository,
@@ -172,6 +183,21 @@ class RunCreateRequest(BaseModel):
     acceptance_criteria: list[str] = Field(default_factory=list, max_length=50)
     context_max_tokens: int = Field(default=64_000, ge=1_000, le=128_000)
     max_tokens: int = Field(default=200_000, ge=1, le=200_000)
+    background: bool = False
+
+
+class RunResumeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    value: dict[str, object] = Field(default_factory=lambda: {"action": "resume"})
+
+
+class RunApprovalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    approved: bool
+    scope: ApprovalScope = ApprovalScope.ONCE
+    command_pattern: str | None = None
 
 
 class AttachmentCreateRequest(BaseModel):
@@ -302,6 +328,9 @@ def create_app(
     app.state.agent_runtime = AgentRuntime(_model_gateway(local_settings))
     app.state.agent_runtimes: dict[tuple[str, str], AgentRuntime] = {}
     app.state.run_coordinator = RunCoordinator()
+    app.state.graph_checkpointer = None
+    app.state.graph_checkpoint_connection = None
+    app.state.background_runs: dict[str, asyncio.Task[object]] = {}
     app.state.runtime_logs: list[dict[str, object]] = []
     app.state.authentication = authentication
     app.state.auth_settings = resolved_auth_settings
@@ -311,6 +340,8 @@ def create_app(
     app.state.active_run_count = 0
     app.state.last_user_activity = time.monotonic()
     database.create_all()
+    database.ensure_real_agent_columns()
+    RunRepository(database).mark_interrupted()
     for user in authentication.users:
         TeamRepository(database).create_user(
             UserRecord(id=user.user_id, display_name=user.display_name)
@@ -364,6 +395,11 @@ def create_app(
 
     @app.on_event("startup")
     async def start_idle_shutdown_monitor() -> None:
+        checkpoint_dir = workspace / ".devpilot"
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        connection = await aiosqlite.connect(checkpoint_dir / "agent-graph.sqlite")
+        app.state.graph_checkpoint_connection = connection
+        app.state.graph_checkpointer = AsyncSqliteSaver(connection)
         app.state.idle_shutdown_task = asyncio.create_task(_idle_shutdown_monitor(app))
 
     @app.on_event("shutdown")
@@ -371,6 +407,15 @@ def create_app(
         task = getattr(app.state, "idle_shutdown_task", None)
         if task is not None:
             task.cancel()
+        background = list(getattr(app.state, "background_runs", {}).values())
+        for run_task in background:
+            if not run_task.done():
+                run_task.cancel()
+        if background:
+            await asyncio.gather(*background, return_exceptions=True)
+        connection = getattr(app.state, "graph_checkpoint_connection", None)
+        if connection is not None:
+            await connection.close()
 
     @app.get("/healthz", tags=["system"])
     def healthz() -> dict[str, str]:
@@ -829,30 +874,140 @@ def create_app(
         if session is None:
             raise HTTPException(status_code=404, detail=f"session not found: {session_id}")
         _require_session_access(app, session, actor_id, SessionPermission.COLLABORATE)
+        if payload.run_id:
+            existing = RunRepository(_database(app)).get(payload.run_id)
+            if existing is not None:
+                if existing["metadata"].get("session_id") != session.id:
+                    raise HTTPException(status_code=409, detail="run_id belongs to another session")
+                return existing
         try:
             prepared = await _prepare_session_run(app, session, payload, actor_id)
         except (ContextBudgetError, ModelChoiceError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        app.state.active_run_count += 1
-        try:
-            result = await prepared.runtime.run(prepared.request)
-        finally:
-            app.state.active_run_count -= 1
-        if result.final_text:
-            SessionRepository(_database(app)).append_message(
-                session_id, ChatMessage.from_text("assistant", result.final_text)
+        if payload.background:
+            task = asyncio.create_task(_execute_prepared_run(app, session, prepared))
+            app.state.background_runs[prepared.request.run_id] = task
+            task.add_done_callback(
+                lambda _: app.state.background_runs.pop(prepared.request.run_id, None)
             )
-        _record_runtime_log(
-            app,
-            event="session.run.completed",
-            message="Session run completed",
-            data={
-                "session_id": session_id,
-                "run_id": prepared.request.run_id,
-                "status": str(result.status),
-            },
-        )
+            await asyncio.sleep(0)
+            record = RunRepository(_database(app)).get(prepared.request.run_id)
+            return record or {
+                "id": prepared.request.run_id,
+                "thread_id": session.thread_id,
+                "status": RunStatus.PENDING.value,
+            }
+        result = await _execute_prepared_run(app, session, prepared)
         return result.model_dump(mode="json")
+
+    @app.get("/api/v1/runs/{run_id}", tags=["runs"])
+    def get_run(
+        run_id: str,
+        actor_id: str = Depends(_authenticated_actor),
+    ) -> dict[str, object]:
+        return _require_run_access(app, run_id, actor_id)
+
+    @app.get("/api/v1/runs/{run_id}/events", tags=["runs"])
+    def get_run_events(
+        run_id: str,
+        after_sequence: int = Query(default=0, ge=0),
+        actor_id: str = Depends(_authenticated_actor),
+    ) -> list[dict[str, object]]:
+        _require_run_access(app, run_id, actor_id)
+        return [
+            event.model_dump(mode="json")
+            for event in RunRepository(_database(app)).list_events(
+                run_id, after_sequence=after_sequence
+            )
+        ]
+
+    @app.post("/api/v1/runs/{run_id}/cancel", tags=["runs"])
+    async def cancel_run(
+        run_id: str,
+        actor_id: str = Depends(_authenticated_actor),
+    ) -> dict[str, object]:
+        runtime, request, _ = _recover_run_runtime(app, run_id, actor_id)
+        cancelled = await runtime.cancel(request.thread_id, request.run_id)
+        if not cancelled:
+            raise HTTPException(status_code=409, detail="run cannot be cancelled")
+        return _require_run_access(app, run_id, actor_id)
+
+    @app.post("/api/v1/runs/{run_id}/resume", tags=["runs"])
+    async def resume_run(
+        run_id: str,
+        payload: RunResumeRequest | None = None,
+        actor_id: str = Depends(_authenticated_actor),
+    ) -> dict[str, object]:
+        runtime, request, _ = _recover_run_runtime(app, run_id, actor_id)
+        try:
+            result = await runtime.resume(
+                request.thread_id,
+                request.run_id,
+                value=(payload.value if payload else {"action": "resume"}),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return result.model_dump(mode="json")
+
+    @app.post("/api/v1/runs/{run_id}/approvals/{request_id}", tags=["runs"])
+    async def decide_run_approval(
+        run_id: str,
+        request_id: str,
+        payload: RunApprovalRequest,
+        actor_id: str = Depends(_authenticated_actor),
+    ) -> dict[str, object]:
+        runtime, request, capabilities = _recover_run_runtime(app, run_id, actor_id)
+        record = _require_run_access(app, run_id, actor_id)
+        pending = record.get("pending_approval")
+        if not isinstance(pending, dict) or pending.get("request_id") != request_id:
+            raise HTTPException(status_code=404, detail="pending approval not found")
+        required = set(pending.get("required_capabilities", []))
+        if not required.issubset(capabilities):
+            raise HTTPException(
+                status_code=403,
+                detail="actor cannot approve capabilities outside current project role",
+            )
+        if runtime.tool_runtime is None:
+            raise HTTPException(status_code=409, detail="run has no tool runtime")
+        if runtime.tool_runtime.approvals.get(request_id) is None:
+            runtime.tool_runtime.approvals.create(
+                ApprovalRequest.model_validate(pending)
+            )
+        try:
+            result = await runtime.approve(
+                request.thread_id,
+                request.run_id,
+                request_id,
+                approved=payload.approved,
+                scope=payload.scope,
+                decided_by=actor_id,
+                command_pattern=payload.command_pattern,
+            )
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return result.model_dump(mode="json")
+
+    @app.get("/api/v1/runs/{run_id}/changes", tags=["runs"])
+    def get_run_changes(
+        run_id: str,
+        actor_id: str = Depends(_authenticated_actor),
+    ) -> dict[str, object]:
+        record = _require_run_access(app, run_id, actor_id)
+        return {"run_id": run_id, "changes": record["changes"]}
+
+    @app.get("/api/v1/runs/{run_id}/usage", tags=["runs"])
+    def get_run_usage(
+        run_id: str,
+        actor_id: str = Depends(_authenticated_actor),
+    ) -> dict[str, object]:
+        record = _require_run_access(app, run_id, actor_id)
+        return {
+            "run_id": run_id,
+            "provider": record["provider"],
+            "model": record["model"],
+            "provider_request_id": record["provider_request_id"],
+            "usage": record["usage"],
+        }
 
     @app.websocket("/api/v1/sessions/{session_id}/events")
     async def session_events(websocket: WebSocket, session_id: str) -> None:
@@ -1573,6 +1728,7 @@ async def _prepare_session_run(
         history=repository.list_messages(session.id),
         metadata={
             "actor_id": actor_id,
+            "session_id": session.id,
             "project_id": session.project_id,
             "capabilities": sorted(capabilities),
             "model_selection": selection_metadata,
@@ -1596,6 +1752,106 @@ async def _prepare_session_run(
         max_context_tokens=payload.context_max_tokens,
         max_run_tokens=payload.max_tokens,
     )
+
+
+async def _execute_prepared_run(
+    app: FastAPI,
+    session: SessionRecord,
+    prepared: PreparedRun,
+):
+    app.state.active_run_count += 1
+    try:
+        result = await prepared.runtime.run(prepared.request)
+    finally:
+        app.state.active_run_count -= 1
+    if result.final_text:
+        SessionRepository(_database(app)).append_message(
+            session.id, ChatMessage.from_text("assistant", result.final_text)
+        )
+    changes: list[dict[str, object]] = []
+    if prepared.runtime.tool_runtime is not None:
+        status = prepared.runtime.tool_runtime.workspace_status()
+        for kind in ("added", "modified", "deleted"):
+            changes.extend({"kind": kind, "path": path} for path in status[kind])
+        diff = prepared.runtime.tool_runtime.workspace_diff()
+        if diff:
+            changes.append({"kind": "diff", "content": diff})
+    RunRepository(_database(app)).save_changes(prepared.request.run_id, changes)
+    _record_runtime_log(
+        app,
+        event="session.run.completed",
+        message="Session run completed",
+        data={
+            "session_id": session.id,
+            "run_id": prepared.request.run_id,
+            "status": str(result.status),
+        },
+    )
+    return result
+
+
+def _require_run_access(
+    app: FastAPI,
+    run_id: str,
+    actor_id: str,
+) -> dict[str, object]:
+    record = RunRepository(_database(app)).get(run_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
+    metadata = record.get("metadata", {})
+    session_id = metadata.get("session_id") if isinstance(metadata, dict) else None
+    session_repository = SessionRepository(_database(app))
+    session = (
+        session_repository.get(str(session_id))
+        if session_id
+        else session_repository.get_by_thread(str(record["thread_id"]))
+    )
+    if session is None:
+        raise HTTPException(status_code=404, detail="run session not found")
+    _require_session_access(app, session, actor_id, SessionPermission.VIEW)
+    if session.project_id is not None:
+        _require_project_access(app, session.project_id, actor_id, write=False)
+    return record
+
+
+def _recover_run_runtime(
+    app: FastAPI,
+    run_id: str,
+    actor_id: str,
+) -> tuple[AgentRuntime, RunRequest, set[str]]:
+    record = _require_run_access(app, run_id, actor_id)
+    request_data = record.get("request")
+    if not isinstance(request_data, dict) or not request_data:
+        raise HTTPException(status_code=409, detail="run request is not recoverable")
+    request = RunRequest.model_validate(request_data)
+    session_id = request.metadata.get("session_id")
+    session_repository = SessionRepository(_database(app))
+    session = (
+        session_repository.get(str(session_id))
+        if session_id
+        else session_repository.get_by_thread(request.thread_id)
+    )
+    if session is None:
+        raise HTTPException(status_code=404, detail="run session not found")
+    capabilities = _capabilities_for_session(app, session, actor_id)
+    runtime = app.state.agent_runtimes.get((request.thread_id, request.run_id))
+    if runtime is None:
+        runtime, capabilities = _runtime_for_session(
+            app,
+            session,
+            actor_id,
+            run_id=request.run_id,
+        )
+        events = RunRepository(_database(app)).list_events(run_id)
+        status_value = RunStatus(str(record["status"]))
+        runtime.restore(
+            request,
+            status=(
+                RunStatus.PAUSED if status_value == RunStatus.RUNNING else status_value
+            ),
+            event_sequence=events[-1].sequence if events else 0,
+        )
+    return runtime, request, capabilities
 
 
 def _workspace_diff(root: Path) -> str:
@@ -1669,14 +1925,50 @@ def _runtime_for_session(
     run_id: str,
 ) -> tuple[AgentRuntime, set[str]]:
     """Bind one coding runtime to the registered project, never the DevPilot repo."""
+    run_repository = RunRepository(_database(app))
+    checkpoint_repository = CheckpointRepository(_database(app))
+    graph_checkpointer = getattr(app.state, "graph_checkpointer", None)
     if session.project_id is None:
-        return _runtime(app), set()
+        runtime = AgentRuntime(
+            _model_gateway(app.state.local_settings),
+            checkpoint_store=checkpoint_repository,
+            graph_checkpointer=graph_checkpointer,
+            run_repository=run_repository,
+        )
+        app.state.agent_runtimes[(session.thread_id, run_id)] = runtime
+        return runtime, set()
     project = _require_project_access(
         app,
         session.project_id,
         actor_id,
         write=False,
     )
+    capabilities = _capabilities_for_session(app, session, actor_id)
+    runtime = AgentRuntime(
+        _model_gateway(app.state.local_settings),
+        checkpoint_store=checkpoint_repository,
+        graph_checkpointer=graph_checkpointer,
+        tool_runtime=ToolRuntime(
+            Path(project.root_path),
+            approvals=PersistentApprovalStore(
+                ApprovalRepository(_database(app)),
+                session_id=session.thread_id,
+            ),
+            audit_log=AuditRepository(_database(app)),
+        ),
+        run_repository=run_repository,
+    )
+    app.state.agent_runtimes[(session.thread_id, run_id)] = runtime
+    return runtime, capabilities
+
+
+def _capabilities_for_session(
+    app: FastAPI,
+    session: SessionRecord,
+    actor_id: str,
+) -> set[str]:
+    if session.project_id is None:
+        return set()
     membership = TeamRepository(_database(app)).get_project_member(
         session.project_id,
         actor_id,
@@ -1692,12 +1984,7 @@ def _runtime_for_session(
                 "git.write",
             }
         )
-    runtime = AgentRuntime(
-        _model_gateway(app.state.local_settings),
-        tool_runtime=ToolRuntime(Path(project.root_path)),
-    )
-    app.state.agent_runtimes[(session.thread_id, run_id)] = runtime
-    return runtime, capabilities
+    return capabilities
 
 
 def _memory_store(app: FastAPI, scope: MemoryScope, owner_id: str) -> LongTermMemoryStore:

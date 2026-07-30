@@ -277,6 +277,14 @@ class AgentRunRow(Base):
     provider: Mapped[str] = mapped_column(String(100), nullable=False)
     model: Mapped[str] = mapped_column(String(200), nullable=False)
     metadata_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    request_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    result_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    usage_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    verification_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    changes_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    stop_reason: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    provider_request_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    pending_approval_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
@@ -325,6 +333,7 @@ class ApprovalRow(Base):
     session_id: Mapped[str] = mapped_column(String(200), nullable=False)
     run_id: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
+    request_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     decision_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

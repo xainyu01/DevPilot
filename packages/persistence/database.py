@@ -7,7 +7,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session as DbSession
 from sqlalchemy.pool import StaticPool
@@ -46,6 +46,41 @@ class Database:
 
     def create_all(self) -> None:
         Base.metadata.create_all(self.engine)
+
+    def ensure_real_agent_columns(self) -> None:
+        """Upgrade databases historically created with ``create_all`` before R5."""
+        inspector = inspect(self.engine)
+        if "agent_runs" not in inspector.get_table_names():
+            return
+        additions = {
+            "request_json": "JSON NOT NULL DEFAULT '{}'",
+            "result_json": "JSON",
+            "usage_json": "JSON NOT NULL DEFAULT '{}'",
+            "verification_json": "JSON NOT NULL DEFAULT '{}'",
+            "changes_json": "JSON NOT NULL DEFAULT '[]'",
+            "stop_reason": "VARCHAR(100)",
+            "provider_request_id": "VARCHAR(200)",
+            "pending_approval_json": "JSON",
+        }
+        existing = {column["name"] for column in inspector.get_columns("agent_runs")}
+        with self.engine.begin() as connection:
+            for name, declaration in additions.items():
+                if name not in existing:
+                    connection.execute(
+                        text(f"ALTER TABLE agent_runs ADD COLUMN {name} {declaration}")
+                    )
+        if "approvals" in inspector.get_table_names():
+            approval_columns = {
+                column["name"] for column in inspect(self.engine).get_columns("approvals")
+            }
+            if "request_json" not in approval_columns:
+                with self.engine.begin() as connection:
+                    connection.execute(
+                        text(
+                            "ALTER TABLE approvals ADD COLUMN request_json "
+                            "JSON NOT NULL DEFAULT '{}'"
+                        )
+                    )
 
     def drop_all(self) -> None:
         Base.metadata.drop_all(self.engine)

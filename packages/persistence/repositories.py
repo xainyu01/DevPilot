@@ -9,6 +9,9 @@ from uuid import uuid4
 from sqlalchemy import delete, func, select
 
 from packages.contracts import (
+    ApprovalDecision,
+    ApprovalRequest,
+    AuditRecord,
     ChatMessage,
     Checkpoint,
     CheckpointRef,
@@ -22,6 +25,9 @@ from packages.contracts import (
     RepositoryProfile,
     RunContext,
     RunEvent,
+    RunEventType,
+    RunRequest,
+    RunResult,
     RunStatus,
     SessionRecord,
     SessionShare,
@@ -39,6 +45,8 @@ from packages.contracts import (
 from .database import Database
 from .models import (
     AgentRunRow,
+    ApprovalRow,
+    AuditLogRow,
     CheckpointRow,
     ContentBlockRow,
     MemoryEntryRow,
@@ -667,6 +675,16 @@ class RunRepository:
     def __init__(self, database: Database) -> None:
         self.database = database
 
+    def mark_interrupted(self) -> None:
+        """Make pre-restart running rows explicitly resumable."""
+        with self.database.session() as db:
+            rows = db.scalars(
+                select(AgentRunRow).where(AgentRunRow.status == RunStatus.RUNNING.value)
+            )
+            for row in rows:
+                row.status = RunStatus.PAUSED.value
+                row.stop_reason = "service_restarted"
+
     def start_run(self, context: RunContext) -> None:
         with self.database.session() as db:
             row = db.get(AgentRunRow, context.run_id)
@@ -682,6 +700,20 @@ class RunRepository:
                     )
                 )
 
+    def start_request(self, request: RunRequest) -> None:
+        context = RunContext(
+            thread_id=request.thread_id,
+            run_id=request.run_id,
+            provider=str(request.provider),
+            model=request.model,
+            metadata=request.metadata,
+        )
+        self.start_run(context)
+        with self.database.session() as db:
+            row = db.get(AgentRunRow, request.run_id)
+            if row is not None and not row.request_json:
+                row.request_json = _json_value(request)
+
     def save_event(self, event: RunEvent) -> None:
         with self.database.session() as db:
             run = db.get(AgentRunRow, event.run_id)
@@ -696,7 +728,23 @@ class RunRepository:
                     )
                 )
             else:
-                run.status = event.status.value
+                terminal_types = {
+                    RunEventType.RUN_PAUSED,
+                    RunEventType.RUN_COMPLETED,
+                    RunEventType.RUN_CANCELLED,
+                    RunEventType.RUN_FAILED,
+                }
+                if event.type in terminal_types:
+                    run.status = event.status.value
+                elif event.type in {
+                    RunEventType.RUN_STARTED,
+                    RunEventType.RUN_RESUMED,
+                }:
+                    run.status = RunStatus.RUNNING.value
+                if event.type == RunEventType.APPROVAL_REQUIRED:
+                    run.pending_approval_json = event.data.get("approval")
+                elif event.type == RunEventType.APPROVAL_DECIDED:
+                    run.pending_approval_json = None
             if (
                 db.scalar(
                     select(RunEventRow).where(
@@ -720,11 +768,62 @@ class RunRepository:
                     )
                 )
 
-    def list_events(self, run_id: str) -> list[RunEvent]:
+    def finish_run(self, result: RunResult) -> None:
+        # Reconcile the complete in-memory sequence as a final idempotent write.
+        # This closes the small observation window between the terminal event
+        # sink and the final result transaction for background HTTP callers.
+        for event in result.events:
+            self.save_event(event)
+        with self.database.session() as db:
+            row = db.get(AgentRunRow, result.context.run_id)
+            if row is None:
+                return
+            row.status = result.status.value
+            row.result_json = _json_value(result)
+            row.usage_json = _json_value(result.usage)
+            row.stop_reason = result.stop_reason
+            row.pending_approval_json = (
+                _json_value(result.pending_approval) if result.pending_approval else None
+            )
+
+    def save_changes(self, run_id: str, changes: list[dict[str, Any]]) -> None:
+        with self.database.session() as db:
+            row = db.get(AgentRunRow, run_id)
+            if row is not None:
+                row.changes_json = _json_value(changes)
+
+    def get(self, run_id: str) -> dict[str, Any] | None:
+        with self.database.session() as db:
+            row = db.get(AgentRunRow, run_id)
+            if row is None:
+                return None
+            return {
+                "id": row.id,
+                "thread_id": row.thread_id,
+                "status": row.status,
+                "provider": row.provider,
+                "model": row.model,
+                "metadata": row.metadata_json,
+                "request": row.request_json,
+                "result": row.result_json,
+                "usage": row.usage_json,
+                "verification": row.verification_json,
+                "changes": row.changes_json,
+                "stop_reason": row.stop_reason,
+                "provider_request_id": row.provider_request_id,
+                "pending_approval": row.pending_approval_json,
+                "created_at": _as_utc(row.created_at).isoformat(),
+                "updated_at": _as_utc(row.updated_at).isoformat(),
+            }
+
+    def list_events(self, run_id: str, *, after_sequence: int = 0) -> list[RunEvent]:
         with self.database.session() as db:
             rows = db.scalars(
                 select(RunEventRow)
-                .where(RunEventRow.run_id == run_id)
+                .where(
+                    RunEventRow.run_id == run_id,
+                    RunEventRow.sequence > after_sequence,
+                )
                 .order_by(RunEventRow.sequence)
             )
             return [
@@ -741,6 +840,112 @@ class RunRepository:
                 )
                 for row in rows
             ]
+
+
+class ApprovalRepository:
+    """Durable approval requests and decisions."""
+
+    def __init__(self, database: Database) -> None:
+        self.database = database
+
+    def save(self, request: ApprovalRequest) -> ApprovalRequest:
+        with self.database.session() as db:
+            row = db.scalar(
+                select(ApprovalRow).where(ApprovalRow.request_id == request.request_id)
+            )
+            if row is None:
+                active_run = db.scalar(
+                    select(AgentRunRow)
+                    .where(
+                        AgentRunRow.thread_id == request.session_id,
+                        AgentRunRow.status.in_(
+                            [RunStatus.RUNNING.value, RunStatus.PAUSED.value]
+                        ),
+                    )
+                    .order_by(AgentRunRow.updated_at.desc())
+                )
+                row = ApprovalRow(
+                    id=str(uuid4()),
+                    request_id=request.request_id,
+                    session_id=request.session_id,
+                    run_id=active_run.id if active_run is not None else "",
+                    status=request.status,
+                )
+                db.add(row)
+            row.session_id = request.session_id
+            row.status = request.status
+            row.request_json = _json_value(request)
+            row.decided_at = request.decided_at
+        return request
+
+    def save_decision(
+        self, request: ApprovalRequest, decision: ApprovalDecision
+    ) -> ApprovalRequest:
+        self.save(request)
+        with self.database.session() as db:
+            row = db.scalar(
+                select(ApprovalRow).where(ApprovalRow.request_id == request.request_id)
+            )
+            if row is not None:
+                row.decision_json = _json_value(decision)
+        return request
+
+    def list(self, *, session_id: str | None = None) -> list[ApprovalRequest]:
+        with self.database.session() as db:
+            query = select(ApprovalRow).order_by(ApprovalRow.created_at.asc())
+            if session_id is not None:
+                query = query.where(ApprovalRow.session_id == session_id)
+            rows = db.scalars(query)
+            return [
+                ApprovalRequest.model_validate(row.request_json)
+                for row in rows
+                if row.request_json
+            ]
+
+
+class AuditRepository:
+    """Append-only tool policy audit adapter."""
+
+    def __init__(self, database: Database) -> None:
+        self.database = database
+
+    def record(self, event: AuditRecord) -> AuditRecord:
+        with self.database.session() as db:
+            if db.get(AuditLogRow, event.audit_id) is None:
+                db.add(
+                    AuditLogRow(
+                        id=event.audit_id,
+                        actor_id=event.actor_id,
+                        action=event.event_type,
+                        resource_type="tool",
+                        resource_id=event.tool_name,
+                        data_json=_json_value(event),
+                        created_at=event.created_at,
+                    )
+                )
+        return event
+
+    def list(
+        self,
+        *,
+        session_id: str | None = None,
+        tool_name: str | None = None,
+    ) -> list[AuditRecord]:
+        with self.database.session() as db:
+            query = select(AuditLogRow).where(AuditLogRow.resource_type == "tool")
+            if tool_name is not None:
+                query = query.where(AuditLogRow.resource_id == tool_name)
+            rows = db.scalars(query.order_by(AuditLogRow.created_at.asc()))
+            records = [
+                AuditRecord.model_validate(row.data_json) for row in rows if row.data_json
+            ]
+            if session_id is not None:
+                records = [item for item in records if item.session_id == session_id]
+            return records
+
+    def clear(self) -> None:
+        with self.database.session() as db:
+            db.execute(delete(AuditLogRow).where(AuditLogRow.resource_type == "tool"))
 
 
 class CheckpointRepository:
@@ -957,6 +1162,8 @@ def _as_utc(value: datetime | None) -> datetime:
 
 
 __all__ = [
+    "ApprovalRepository",
+    "AuditRepository",
     "CheckpointRepository",
     "MemoryRepository",
     "ProjectRepository",

@@ -1,7 +1,7 @@
 # DevPilot 实施进度
 
 > 最后更新：2026-07-31（Asia/Shanghai）
-> 当前批次：B8-R5（持久化运行、审批与 Web 工作台）
+> 当前批次：B8-R6（服务器端完成验证和纠错）
 
 进度事实源为 [`progress.json`](progress.json)。
 
@@ -15,12 +15,13 @@
 | B5 | 已完成 | 100% | CLI、React/Vite 工作台与会话事件 |
 | B6 | 已完成 | 100% | Windows-first 本地 Web 与平台端口 |
 | B7 | 已完成 | 100% | 用户、团队、RBAC、共享与远程 Host |
-| B8 | 进行中 | 86% | 稳定化、安全、真实 Agent 闭环、恢复、部署与发布 |
+| B8 | 进行中 | 90% | 稳定化、安全、真实 Agent 闭环、恢复、部署与发布 |
 | B8-R1 | 已完成 | 100% | ModelToolCall 契约、OpenAI/Anthropic 工具协议与 DeepSeek 真实冒烟 |
 | B8-R2 | 已完成 | 100% | LangGraph 自主工具循环、预算、重复检测与审批恢复 |
 | B8-R3 | 已完成 | 100% | 项目级编程工具、路径/进程安全与专用测试 |
 | B8-R4 | 已完成 | 100% | ContextAssembler、会话/规则/仓库/记忆与统一协调器 |
-| B8-R5 | 进行中 | 0% | Run/Event/Checkpoint 持久化、审批恢复、控制 API 与 Web 工作台 |
+| B8-R5 | 已完成 | 100% | Run/Event/Checkpoint 持久化、审批恢复、控制 API 与 Web 工作台 |
+| B8-R6 | 进行中 | 0% | CompletionVerifier、证据验收与自动纠错 |
 
 ## 下一阶段已确认
 
@@ -77,10 +78,15 @@ R4 已增加供应商无关 `ContextAssembler` 和 REST/WebSocket 共用的 `Run
 有限仓库画像及启用的用户/项目记忆。安全约束、项目规则、当前 Diff 和当前任务不可被裁剪；若必需
 上下文本身超预算则明确拒绝运行。模型只看到项目根别名 `.`，工具根仍精确绑定注册项目路径。
 
+R5 已把 RunRequest、Run/Event、结果、Token、工作区变化、审批、审计和 checkpoint 接入真实
+AgentRuntime；LangGraph 通道状态使用持久 SQLite checkpointer。后台 Run 可查询、取消、恢复和审批，
+同一 `run_id` 重连不重复执行工具；服务重启后等待审批仍可恢复。Web 工作台显示计划、实际模型、
+Tool Call/Result、审批和 Token 卡片，刷新后从持久事件 API 恢复。
+
 - 问题分析：[REAL_AGENT_GAP_ANALYSIS.md](REAL_AGENT_GAP_ANALYSIS.md)
 - 完整纠偏计划：[REAL_AGENT_IMPLEMENTATION_PLAN.md](REAL_AGENT_IMPLEMENTATION_PLAN.md)
 
-下一步必须连续完成计划中的 R5～R7，并以 DeepSeek 自主产生 Tool Call、创建 Event Lens 文件、
+下一步必须连续完成计划中的 R6～R7，并以 DeepSeek 自主产生 Tool Call、创建 Event Lens 文件、
 执行测试和形成持久化证据作为发布门槛。不得由 DevPilot/Codex 手工代写验收项目代码。
 
 ## 其他待完成的发布验收

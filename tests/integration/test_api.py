@@ -1,8 +1,83 @@
+import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from apps.api.main import app, create_app
+from packages.contracts import (
+    AdapterHealth,
+    ChatMessage,
+    ChatRequest,
+    ChatResponse,
+    ModelCapabilities,
+    ModelStopReason,
+    ModelStreamEvent,
+    ModelToolCall,
+    TokenUsage,
+)
+from packages.model_gateway import ChatModelAdapter, ModelGateway
+
+
+class ApprovalToolModel(ChatModelAdapter):
+    provider = "fake"
+    model = "fake-model"
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def capabilities(self) -> ModelCapabilities:
+        return ModelCapabilities(text=True, tools=True)
+
+    def count_tokens(self, messages: list[ChatMessage]) -> TokenUsage:
+        return TokenUsage(input_tokens=len(messages), total_tokens=len(messages))
+
+    def healthcheck(self) -> AdapterHealth:
+        return AdapterHealth(provider=self.provider, model=self.model, status="ready")
+
+    async def invoke(self, request: ChatRequest) -> ChatResponse:
+        raise NotImplementedError
+
+    async def stream(self, request: ChatRequest):
+        self.calls += 1
+        tool_call = (
+            ModelToolCall(
+                call_id="api-delete-once",
+                name="file.delete",
+                arguments={"path": "victim.txt"},
+            )
+            if self.calls == 1
+            else None
+        )
+        if tool_call is not None:
+            yield ModelStreamEvent(
+                provider=self.provider,
+                model=self.model,
+                kind="tool_call_end",
+                tool_call=tool_call,
+                tool_call_id=tool_call.call_id,
+                tool_name=tool_call.name,
+                tool_call_complete=True,
+            )
+        else:
+            yield ModelStreamEvent(
+                provider=self.provider,
+                model=self.model,
+                kind="text_delta",
+                text="Approved deletion completed.",
+            )
+        yield ModelStreamEvent(
+            provider=self.provider,
+            model=self.model,
+            kind="message_end",
+            done=True,
+            usage=TokenUsage(input_tokens=2, output_tokens=2),
+            stop_reason=(
+                ModelStopReason.TOOL_CALLS
+                if tool_call is not None
+                else ModelStopReason.TEXT_END
+            ),
+            finish_reason="tool_calls" if tool_call is not None else "stop",
+        )
 
 
 def authenticate(client: TestClient) -> str:
@@ -195,6 +270,108 @@ def test_websocket_first_conversation_streams_terminal_event(tmp_path: Path) -> 
         snapshot = client.get(f"/api/v1/sessions/{session['id']}").json()
         assert "run.completed" in event_types
         assert snapshot["messages"][-1]["message"]["role"] == "assistant"
+
+
+def test_background_run_query_usage_and_idempotent_reconnect(tmp_path: Path) -> None:
+    web_app = create_app(
+        database_url=f"sqlite:///{tmp_path / 'background.db'}", workspace_root=tmp_path
+    )
+
+    with TestClient(web_app) as client:
+        authenticate(client)
+        session = client.post(
+            "/api/v1/sessions",
+            json={"thread_id": "background-thread"},
+        ).json()
+        payload = {
+            "run_id": "background-run",
+            "background": True,
+            "message": {
+                "role": "user",
+                "content": [{"type": "text", "text": "run in the background"}],
+            },
+        }
+        created = client.post(
+            f"/api/v1/sessions/{session['id']}/runs",
+            json=payload,
+        )
+        assert created.status_code == 201
+        for _ in range(100):
+            record = client.get("/api/v1/runs/background-run")
+            if record.json()["status"] == "completed":
+                break
+            time.sleep(0.01)
+        assert record.json()["status"] == "completed"
+
+        events = client.get("/api/v1/runs/background-run/events").json()
+        usage = client.get("/api/v1/runs/background-run/usage").json()
+        changes = client.get("/api/v1/runs/background-run/changes").json()
+        repeated = client.post(
+            f"/api/v1/sessions/{session['id']}/runs",
+            json=payload,
+        )
+        after_reconnect = client.get("/api/v1/runs/background-run/events").json()
+
+        assert events[-1]["type"] == "run.completed"
+        assert usage["usage"]["total_tokens"] > 0
+        assert changes == {"run_id": "background-run", "changes": []}
+        assert repeated.json()["id"] == "background-run"
+        assert len(after_reconnect) == len(events)
+
+
+def test_approval_api_resumes_high_risk_tool(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    model = ApprovalToolModel()
+    monkeypatch.setattr(
+        "apps.api.main._model_gateway",
+        lambda _settings: ModelGateway([model]),
+    )
+    web_app = create_app(
+        database_url=f"sqlite:///{tmp_path / 'approval.db'}", workspace_root=tmp_path
+    )
+    project_root = tmp_path / "approval-project"
+    project_root.mkdir()
+    victim = project_root / "victim.txt"
+    victim.write_text("delete after approval", encoding="utf-8")
+
+    with TestClient(web_app) as client:
+        authenticate(client)
+        project = client.post(
+            "/api/v1/projects",
+            json={"name": "approval", "root_path": str(project_root)},
+        ).json()
+        session = client.post(
+            "/api/v1/sessions",
+            json={"thread_id": "approval-thread", "project_id": project["id"]},
+        ).json()
+        paused = client.post(
+            f"/api/v1/sessions/{session['id']}/runs",
+            json={
+                "run_id": "approval-run",
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "Delete victim.txt."}],
+                },
+            },
+        )
+        assert paused.status_code == 201
+        assert paused.json()["status"] == "paused"
+        approval = paused.json()["pending_approval"]
+        assert victim.exists()
+
+        decided = client.post(
+            f"/api/v1/runs/approval-run/approvals/{approval['request_id']}",
+            json={"approved": True, "scope": "once"},
+        )
+
+        assert decided.status_code == 200
+        assert decided.json()["status"] == "completed"
+        assert not victim.exists()
+        events = client.get("/api/v1/runs/approval-run/events").json()
+        assert [event["type"] for event in events].count("tool.output") == 1
+        assert "approval.decided" in [event["type"] for event in events]
 
 
 def test_project_registration_rejects_missing_or_file_path(tmp_path: Path) -> None:

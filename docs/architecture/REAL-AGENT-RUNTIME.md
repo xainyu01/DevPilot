@@ -33,5 +33,17 @@
 的用户消息、Assistant 回复和 Tool Result。启用的用户记忆和项目记忆作为明确标注的不可信上下文
 加入；附件仍以契约中的安全 ID 引用，不向模型传递本地附件路径。
 
-R5 将在此入口之后增加持久化 Run/Event/Checkpoint、后台控制和恢复 API；R6 将增加独立的服务器
-完成验证，不能以模型自报成功替代工作区和测试证据。
+## R5 持久化运行与恢复
+
+真实 `AgentRuntime` 注入 `RunRepository`、`CheckpointRepository`、持久审批仓储和持久审计仓储。
+主数据库保存原始 RunRequest、结果、事件、审批、usage、workspace changes 与 stop reason；
+LangGraph 通道状态使用 `langgraph-checkpoint-sqlite` 存在工作区忽略目录中。事件 `(run_id,
+sequence)` 唯一，同一 `run_id` 重连只读取既有记录。
+
+服务重启时，上次中断的 `running` 记录转为可恢复的 `paused`；API 从持久请求重建相同项目根和当前
+RBAC capabilities，再从复合 thread/run checkpoint 继续。审批仓储恢复原 request/fingerprint，
+批准或拒绝后才会执行被中断的工具。
+
+Web 工作台按事件显示计划、实际 endpoint/model、Tool Call 脱敏参数、Tool Result、审批卡片、
+Token、文件变化和终态，并从事件 API 恢复刷新前的时间线。R6 将增加独立的服务器完成验证，不能以
+模型自报成功替代工作区和测试证据。

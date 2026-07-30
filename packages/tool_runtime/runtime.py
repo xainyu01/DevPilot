@@ -64,6 +64,20 @@ class ToolRuntime:
             capabilities=capabilities or {"workspace.read"},
         )
 
+    def workspace_status(self) -> dict[str, list[str]]:
+        """Return changes relative to this runtime's protected baseline."""
+        tool = self.registry.get("workspace.status")
+        tracker = getattr(tool, "tracker", None)
+        if tracker is None:
+            return {"added": [], "modified": [], "deleted": []}
+        return tracker.status()
+
+    def workspace_diff(self) -> str:
+        """Return a bounded textual diff relative to this runtime's baseline."""
+        tool = self.registry.get("file.diff")
+        tracker = getattr(tool, "tracker", None)
+        return tracker.diff() if tracker is not None else ""
+
     async def execute(
         self,
         call: ToolCall,

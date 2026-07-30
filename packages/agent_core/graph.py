@@ -157,7 +157,7 @@ def build_agent_graph(
     *,
     control: _RunControl | None = None,
     emitter: _EventEmitter | None = None,
-    checkpointer: InMemorySaver | None = None,
+    checkpointer: Any | None = None,
     tool_runtime: ToolRuntime | None = None,
 ) -> Any:
     """Build and compile the Agent graph with optional B2 tool execution.
@@ -351,6 +351,9 @@ def build_agent_graph(
                     "tool_calls": [call.model_dump(mode="json") for call in model_tool_calls],
                     "iteration": iteration + 1,
                     "usage": final_usage.model_dump(mode="json"),
+                    "provider": request.provider,
+                    "model": request.model,
+                    "response_metadata": _safe_event_value(response_metadata),
                 },
             )
             return {
@@ -401,7 +404,11 @@ def build_agent_graph(
                     RunEventType.TOOL_REQUESTED,
                     state=current,
                     node="execute_tools",
-                    data={"call_id": call.call_id, "tool_name": call.name},
+                    data={
+                        "call_id": call.call_id,
+                        "tool_name": call.name,
+                        "arguments": _safe_event_value(call.arguments),
+                    },
                 )
                 result = await tool_runtime.execute(call, context=context)
                 if result.status == "pending_approval" and result.approval_request is not None:
@@ -679,7 +686,7 @@ class AgentRuntime:
         gateway: ModelGateway,
         *,
         checkpoint_store: CheckpointStore | None = None,
-        graph_checkpointer: InMemorySaver | None = None,
+        graph_checkpointer: Any | None = None,
         tool_runtime: ToolRuntime | None = None,
         run_repository: Any | None = None,
     ) -> None:
@@ -700,9 +707,13 @@ class AgentRuntime:
         )
         event_sink = None
         if self.run_repository is not None:
-            start_run = getattr(self.run_repository, "start_run", None)
-            if start_run is not None:
-                start_run(context)
+            start_request = getattr(self.run_repository, "start_request", None)
+            if start_request is not None:
+                start_request(request)
+            else:
+                start_run = getattr(self.run_repository, "start_run", None)
+                if start_run is not None:
+                    start_run(context)
             event_sink = getattr(self.run_repository, "save_event", None)
         handle = _RunHandle(request=request, context=context, event_sink=event_sink)
         self._handles[(request.thread_id, request.run_id)] = handle
@@ -945,8 +956,40 @@ class AgentRuntime:
                 stop_reason="runtime_error",
             )
         handle.result = output
+        if self.run_repository is not None:
+            finish_run = getattr(self.run_repository, "finish_run", None)
+            if finish_run is not None:
+                finish_run(output)
         handle.done.set()
         return output
+
+    def restore(
+        self,
+        request: RunRequest,
+        *,
+        status: RunStatus,
+        event_sequence: int = 0,
+    ) -> None:
+        """Restore a durable handle; LangGraph state remains in its durable checkpointer."""
+        key = (request.thread_id, request.run_id)
+        if key in self._handles:
+            return
+        context = RunContext(
+            thread_id=request.thread_id,
+            run_id=request.run_id,
+            provider=str(request.provider),
+            model=request.model,
+            metadata=request.metadata,
+        )
+        event_sink = (
+            getattr(self.run_repository, "save_event", None)
+            if self.run_repository is not None
+            else None
+        )
+        handle = _RunHandle(request=request, context=context, event_sink=event_sink)
+        handle.status = status
+        handle.emitter.sequence = event_sequence
+        self._handles[key] = handle
 
     async def run(self, request: RunRequest) -> RunResult:
         key = (request.thread_id, request.run_id)
@@ -1107,6 +1150,23 @@ class AgentRuntime:
 def _json_value(value: Any) -> Any:
     if hasattr(value, "model_dump"):
         return value.model_dump(mode="json")
+    return value
+
+
+def _safe_event_value(value: Any, *, key: str = "") -> Any:
+    """Redact credential-shaped metadata before it reaches events or persistence."""
+    lowered = key.lower()
+    if any(marker in lowered for marker in ("api_key", "token", "secret", "password")):
+        return "[redacted]"
+    if isinstance(value, dict):
+        return {
+            str(item_key): _safe_event_value(item, key=str(item_key))
+            for item_key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_safe_event_value(item) for item in value[:100]]
+    if isinstance(value, str) and len(value) > 2_000:
+        return value[:2_000] + "[truncated]"
     return value
 
 
