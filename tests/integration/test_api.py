@@ -97,6 +97,76 @@ def test_local_web_first_conversation_and_runtime_logs(tmp_path: Path) -> None:
         assert "session.run.completed" in events
 
 
+def test_project_runs_share_rules_history_and_reject_unauthorized_user(
+    tmp_path: Path,
+) -> None:
+    web_app = create_app(
+        database_url=f"sqlite:///{tmp_path / 'context.db'}", workspace_root=tmp_path
+    )
+    project_root = tmp_path / "context-project"
+    project_root.mkdir()
+    (project_root / "AGENTS.md").write_text(
+        "R4_RULE: inspect existing files before editing.",
+        encoding="utf-8",
+    )
+
+    with TestClient(web_app) as client:
+        authenticate(client)
+        project = client.post(
+            "/api/v1/projects",
+            json={"name": "context-project", "root_path": str(project_root)},
+        ).json()
+        session = client.post(
+            "/api/v1/sessions",
+            json={"thread_id": "context-thread", "project_id": project["id"]},
+        ).json()
+        first = client.post(
+            f"/api/v1/sessions/{session['id']}/runs",
+            json={
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "Remember first-turn-marker."}],
+                }
+            },
+        )
+        assert first.status_code == 201
+        second = client.post(
+            f"/api/v1/sessions/{session['id']}/runs",
+            json={
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "Use the prior context now."}],
+                }
+            },
+        )
+        assert second.status_code == 201
+        run_id = second.json()["context"]["run_id"]
+        runtime = web_app.state.agent_runtimes[("context-thread", run_id)]
+        request = runtime._handles[("context-thread", run_id)].request
+        rendered = "\n".join(message.text_content() for message in request.messages)
+        assert "R4_RULE: inspect existing files before editing." in rendered
+        assert "first-turn-marker" in rendered
+        assert "Use the prior context now." in rendered
+        assert str(project_root.resolve()) not in rendered
+        assert runtime.tool_runtime.workspace_root == project_root.resolve()
+
+        login = client.post(
+            "/api/v1/auth/login",
+            json={"username": "admin1", "password": "admin1"},
+        )
+        denied = client.post(
+            f"/api/v1/sessions/{session['id']}/runs",
+            headers={"Authorization": f"Bearer {login.json()['access_token']}"},
+            json={
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "Read the private project."}],
+                }
+            },
+        )
+        assert denied.status_code == 403
+
+
 def test_websocket_first_conversation_streams_terminal_event(tmp_path: Path) -> None:
     web_app = create_app(
         database_url=f"sqlite:///{tmp_path / 'websocket.db'}", workspace_root=tmp_path

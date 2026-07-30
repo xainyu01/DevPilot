@@ -1,8 +1,8 @@
 {
   "overall_percent": 95,
-  "current_batch": "B8-R4",
-  "next_action": "执行 R4 上下文组装、记忆和真实项目绑定，验收并提交后继续 R5～R7。",
-  "updated_at": "2026-07-31T03:30:00+08:00",
+  "current_batch": "B8-R5",
+  "next_action": "执行 R5 持久化运行、审批恢复 API 和 Web 工作台，验收并提交后继续 R6～R7。",
+  "updated_at": "2026-07-31T04:15:00+08:00",
   "constraints": [
     "普通文档放在 docs/",
     "Python 依赖只由 uv 管理并提交 uv.lock",
@@ -104,7 +104,7 @@
       "id": "B8",
       "title": "阶段 8：稳定化与发布",
       "status": "进行中",
-      "percent": 82,
+      "percent": 86,
       "scope": ["安全加固", "恢复", "迁移", "备份", "真实 Agent 闭环", "Docker 发布"],
       "completed": [
         "固定 B7 用户写入 users 表，并改用可跨重启验证的 HS256 JWT",
@@ -117,20 +117,20 @@
         "通过 83 项测试、设置/凭据模块 90% 覆盖率、Ruff、Vite build 和 DeepSeek 双协议最小真实调用",
         "完成供应商无关 ModelToolCall、严格 JSON Schema 校验、OpenAI/Anthropic 工具协议和流式参数合并；DeepSeek 双协议均真实产生 file.read Tool Call",
         "完成 LangGraph 模型—工具—结果—模型循环、服务器硬预算、重复/无进展终止和审批 checkpoint 恢复；DeepSeek 真实只读 Agent 闭环成功",
-        "完成项目级文件创建/写入/删除/Diff/状态/扫描/测试工具、hash 保护、Shell 路径校验和 Windows Job Object 进程树终止；DeepSeek 真实写工具冒烟成功"
+        "完成项目级文件创建/写入/删除/Diff/状态/扫描/测试工具、hash 保护、Shell 路径校验和 Windows Job Object 进程树终止；DeepSeek 真实写工具冒烟成功",
+        "完成统一 ContextAssembler/RunCoordinator，恢复完整会话并组装项目规则、仓库画像、工作区变化与用户/项目记忆"
       ],
       "in_progress": [
-        "组装会话、项目规则、仓库画像、用户变化和记忆上下文，并统一 REST/WebSocket RunCoordinator",
+        "持久化 Run/Event/Checkpoint/Approval/Usage 并提供后台运行和恢复 API",
         "在 Docker 可用的环境执行 Compose 配置和容器启动健康检查"
       ],
       "next_steps": [
-        "执行 docs/REAL_AGENT_IMPLEMENTATION_PLAN.md 的 R4～R7",
+        "执行 docs/REAL_AGENT_IMPLEMENTATION_PLAN.md 的 R5～R7",
         "使用 DeepSeek 通过真实 FastAPI/WebSocket 在空目录自主创建 Event Lens 项目并运行测试",
         "运行 docker compose config",
         "运行 docker compose up --build -d 并验证 /healthz 与 /readyz"
       ],
       "blockers": [
-        "真实 Agent E2E 已失败：Run 被标记 completed，但 Tool 事件、文件变化和测试执行均为 0",
         "当前工作站未安装 Docker、docker-compose 或 Podman，无法执行容器发布验收"
       ]
     },
@@ -191,15 +191,32 @@
     {
       "id": "B8-R4",
       "title": "B8 纠偏 R4：项目上下文组装与记忆",
+      "status": "已完成",
+      "percent": 100,
+      "scope": ["ContextAssembler", "会话历史", "项目规则", "仓库画像", "工作区变化", "记忆", "Token 裁剪", "统一协调器"],
+      "completed": [
+        "新增供应商无关 ContextAssembler，必需保留安全规则、项目规则、当前 Diff 和用户任务",
+        "按 Token 预算保留最新完整会话并裁剪旧历史，可选加载摘要、用户/项目记忆和有限仓库画像",
+        "模型只接收项目根别名和相对规则来源，不泄漏不必要的绝对宿主路径",
+        "REST 与 WebSocket 通过同一个 RunCoordinator、模型选择和 RBAC 项目绑定入口",
+        "规则、第二轮历史、项目根一致、大上下文预算和未授权访问验收通过"
+      ],
+      "in_progress": [],
+      "next_steps": [],
+      "blockers": []
+    },
+    {
+      "id": "B8-R5",
+      "title": "B8 纠偏 R5：持久化运行、审批与 Web 工作台",
       "status": "进行中",
       "percent": 0,
-      "scope": ["ContextAssembler", "会话历史", "项目规则", "仓库画像", "工作区变化", "记忆", "Token 裁剪", "统一协调器"],
+      "scope": ["Run/Event/Checkpoint 持久化", "审批恢复", "后台运行", "查询与控制 API", "Web 运行卡片"],
       "completed": [],
-      "in_progress": ["实现供应商无关 ContextAssembler 并统一 REST/WebSocket 创建逻辑"],
+      "in_progress": ["把持久化仓储和控制服务注入真实 AgentRuntime"],
       "next_steps": [
-        "补齐规则、第二轮历史、项目根一致、大仓库预算和未授权访问测试",
-        "接入用户/项目记忆与工作区状态",
-        "验收并创建 R4 提交后自动继续 R5"
+        "增加运行、事件、取消、恢复、审批、变化和 Usage API",
+        "实现重启恢复与重连幂等测试",
+        "更新 Web 工作台并创建 R5 提交"
       ],
       "blockers": []
     }

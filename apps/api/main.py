@@ -6,6 +6,7 @@ import hashlib
 import os
 import secrets
 import signal
+import subprocess
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -30,7 +31,12 @@ from sqlalchemy.exc import SQLAlchemyError
 from starlette.responses import FileResponse
 from starlette.staticfiles import StaticFiles
 
-from packages.agent_core import AgentRuntime
+from packages.agent_core import (
+    AgentRuntime,
+    ContextBudgetError,
+    PreparedRun,
+    RunCoordinator,
+)
 from packages.contracts import (
     ChatMessage,
     IssueContext,
@@ -40,7 +46,6 @@ from packages.contracts import (
     ProjectRecord,
     RemoteHost,
     ReviewStatus,
-    RunRequest,
     SessionPermission,
     SessionRecord,
     SessionShare,
@@ -164,6 +169,9 @@ class RunCreateRequest(BaseModel):
     model: str | None = None
     allowed_models: list["ModelTargetRequest"] = Field(default_factory=list)
     run_id: str | None = None
+    acceptance_criteria: list[str] = Field(default_factory=list, max_length=50)
+    context_max_tokens: int = Field(default=64_000, ge=1_000, le=128_000)
+    max_tokens: int = Field(default=200_000, ge=1, le=200_000)
 
 
 class AttachmentCreateRequest(BaseModel):
@@ -293,6 +301,7 @@ def create_app(
     app.state.workspace_root = workspace
     app.state.agent_runtime = AgentRuntime(_model_gateway(local_settings))
     app.state.agent_runtimes: dict[tuple[str, str], AgentRuntime] = {}
+    app.state.run_coordinator = RunCoordinator()
     app.state.runtime_logs: list[dict[str, object]] = []
     app.state.authentication = authentication
     app.state.auth_settings = resolved_auth_settings
@@ -821,45 +830,12 @@ def create_app(
             raise HTTPException(status_code=404, detail=f"session not found: {session_id}")
         _require_session_access(app, session, actor_id, SessionPermission.COLLABORATE)
         try:
-            selection = await _select_runtime_model(app, payload)
-        except ModelChoiceError as exc:
+            prepared = await _prepare_session_run(app, session, payload, actor_id)
+        except (ContextBudgetError, ModelChoiceError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        SessionRepository(_database(app)).append_message(session_id, payload.message)
-        run_id = payload.run_id or str(uuid4())
-        runtime, capabilities = _runtime_for_session(
-            app,
-            session,
-            actor_id,
-            run_id=run_id,
-        )
-        request = RunRequest(
-            thread_id=session.thread_id,
-            run_id=run_id,
-            provider=selection.target.endpoint_id,
-            model=selection.target.model,
-            messages=[payload.message],
-            metadata={
-                "actor_id": actor_id,
-                "project_id": session.project_id,
-                "capabilities": sorted(capabilities),
-                "model_selection": {
-                    "mode": selection.mode,
-                    "reason": selection.reason,
-                    "fallback_used": selection.fallback_used,
-                    "selector": (
-                        {
-                            "endpoint_id": selection.selector.endpoint_id,
-                            "model": selection.selector.model,
-                        }
-                        if selection.selector
-                        else None
-                    ),
-                }
-            },
-        )
         app.state.active_run_count += 1
         try:
-            result = await runtime.run(request)
+            result = await prepared.runtime.run(prepared.request)
         finally:
             app.state.active_run_count -= 1
         if result.final_text:
@@ -870,7 +846,11 @@ def create_app(
             app,
             event="session.run.completed",
             message="Session run completed",
-            data={"session_id": session_id, "run_id": request.run_id, "status": str(result.status)},
+            data={
+                "session_id": session_id,
+                "run_id": prepared.request.run_id,
+                "status": str(result.status),
+            },
         )
         return result.model_dump(mode="json")
 
@@ -896,44 +876,11 @@ def create_app(
             while True:
                 payload = RunCreateRequest.model_validate(await websocket.receive_json())
                 app.state.last_user_activity = time.monotonic()
-                selection = await _select_runtime_model(app, payload)
-                SessionRepository(_database(app)).append_message(session_id, payload.message)
-                run_id = payload.run_id or str(uuid4())
-                runtime, capabilities = _runtime_for_session(
-                    app,
-                    session,
-                    actor_id,
-                    run_id=run_id,
-                )
-                request = RunRequest(
-                    thread_id=session.thread_id,
-                    run_id=run_id,
-                    provider=selection.target.endpoint_id,
-                    model=selection.target.model,
-                    messages=[payload.message],
-                    metadata={
-                        "actor_id": actor_id,
-                        "project_id": session.project_id,
-                        "capabilities": sorted(capabilities),
-                        "model_selection": {
-                            "mode": selection.mode,
-                            "reason": selection.reason,
-                            "fallback_used": selection.fallback_used,
-                            "selector": (
-                                {
-                                    "endpoint_id": selection.selector.endpoint_id,
-                                    "model": selection.selector.model,
-                                }
-                                if selection.selector
-                                else None
-                            ),
-                        }
-                    },
-                )
+                prepared = await _prepare_session_run(app, session, payload, actor_id)
                 final_text = None
                 app.state.active_run_count += 1
                 try:
-                    async for event in runtime.stream(request):
+                    async for event in prepared.runtime.stream(prepared.request):
                         await websocket.send_json(event.model_dump(mode="json"))
                         if event.type.value == "run.completed":
                             final_text = event.data.get("text")
@@ -949,7 +896,7 @@ def create_app(
                         message="WebSocket session run completed",
                         data={
                             "session_id": session_id,
-                            "run_id": request.run_id,
+                            "run_id": prepared.request.run_id,
                             "transport": "websocket",
                         },
                     )
@@ -1544,6 +1491,134 @@ async def _select_runtime_model(app: FastAPI, payload: RunCreateRequest):
         requested=requested,
         allowed=allowed,
     )
+
+
+async def _prepare_session_run(
+    app: FastAPI,
+    session: SessionRecord,
+    payload: RunCreateRequest,
+    actor_id: str,
+) -> PreparedRun:
+    """Build one project-bound request for both HTTP and WebSocket transports."""
+    selection = await _select_runtime_model(app, payload)
+    repository = SessionRepository(_database(app))
+    repository.append_message(session.id, payload.message)
+    run_id = payload.run_id or str(uuid4())
+    runtime, capabilities = _runtime_for_session(
+        app,
+        session,
+        actor_id,
+        run_id=run_id,
+    )
+    project = None
+    rules = []
+    profile = None
+    workspace_diff = ""
+    memories = MemoryRepository(_database(app)).list(
+        owner_id=actor_id,
+        scope=MemoryScope.USER,
+        include_disabled=False,
+    )
+    if session.project_id is not None:
+        project = _require_project_access(app, session.project_id, actor_id, write=False)
+        root = Path(project.root_path)
+        context = ProjectContextService().discover_and_store(
+            project_id=project.id,
+            project_root=root,
+            repository=RuleRepository(_database(app)),
+        )
+        rules = context.rules
+        profile_repository = RepositoryProfileRepository(_database(app))
+        profile = RepositoryScanner(root).scan(
+            project_id=project.id,
+            previous=profile_repository.get(project.id),
+            persist=False,
+        )
+        profile_repository.save(profile)
+        workspace_diff = _workspace_diff(root)
+        memories.extend(
+            MemoryRepository(_database(app)).list(
+                owner_id=project.id,
+                scope=MemoryScope.PROJECT,
+                include_disabled=False,
+            )
+        )
+    tools = []
+    if runtime.tool_runtime is not None:
+        tools = [
+            definition
+            for definition in runtime.tool_runtime.registry.definitions()
+            if set(definition.required_capabilities).issubset(capabilities)
+        ]
+    selection_metadata = {
+        "mode": selection.mode,
+        "reason": selection.reason,
+        "fallback_used": selection.fallback_used,
+        "selector": (
+            {
+                "endpoint_id": selection.selector.endpoint_id,
+                "model": selection.selector.model,
+            }
+            if selection.selector
+            else None
+        ),
+    }
+    return app.state.run_coordinator.prepare(
+        runtime=runtime,
+        thread_id=session.thread_id,
+        run_id=run_id,
+        provider=selection.target.endpoint_id,
+        model=selection.target.model,
+        current_message=payload.message,
+        history=repository.list_messages(session.id),
+        metadata={
+            "actor_id": actor_id,
+            "project_id": session.project_id,
+            "capabilities": sorted(capabilities),
+            "model_selection": selection_metadata,
+        },
+        acceptance_criteria=payload.acceptance_criteria,
+        project=project,
+        rules=rules,
+        repository_profile=profile,
+        workspace_diff=workspace_diff,
+        memories=memories,
+        summary=repository.get_summary(session.id),
+        capabilities=capabilities,
+        tools=tools,
+        model_policy={
+            "selected": {
+                "endpoint_id": selection.target.endpoint_id,
+                "model": selection.target.model,
+            },
+            **selection_metadata,
+        },
+        max_context_tokens=payload.context_max_tokens,
+        max_run_tokens=payload.max_tokens,
+    )
+
+
+def _workspace_diff(root: Path) -> str:
+    """Return bounded Git status and diff without exposing the absolute project root."""
+    commands = (
+        ["git", "status", "--short", "--untracked-files=all"],
+        ["git", "diff", "--no-ext-diff", "--"],
+    )
+    sections: list[str] = []
+    for command in commands:
+        result = subprocess.run(
+            command,
+            cwd=root,
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            sections.append(result.stdout.strip())
+    return "\n\n".join(sections)
 
 
 def _target_from_request(value: ModelTargetRequest) -> ModelTarget:
