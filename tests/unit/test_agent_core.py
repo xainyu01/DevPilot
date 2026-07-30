@@ -458,6 +458,51 @@ async def test_tool_failure_is_returned_to_model_for_corrected_retry(tmp_path: P
 
 
 @pytest.mark.asyncio
+async def test_parallel_failures_count_as_one_no_progress_batch(tmp_path: Path) -> None:
+    for index in range(3):
+        (tmp_path / f"exists-{index}.txt").write_text("ok", encoding="utf-8")
+    model = ScriptedToolModel(
+        [
+            (
+                "",
+                [
+                    model_call(f"bad-{index}", "file.read", path=f"missing-{index}.txt")
+                    for index in range(3)
+                ],
+            ),
+            (
+                "",
+                [
+                    model_call(
+                        f"fixed-{index}",
+                        "file.read",
+                        path=f"exists-{index}.txt",
+                    )
+                    for index in range(3)
+                ],
+            ),
+            ("Recovered the failed parallel batch.", []),
+        ]
+    )
+    runtime = AgentRuntime(
+        ModelGateway([model]),
+        tool_runtime=ToolRuntime(tmp_path),
+    )
+
+    result = await runtime.run(scripted_request())
+
+    assert result.status == RunStatus.COMPLETED
+    assert [item.status for item in result.tool_results] == [
+        "failed",
+        "failed",
+        "failed",
+        "succeeded",
+        "succeeded",
+        "succeeded",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_model_generated_high_risk_call_resumes_same_loop(tmp_path: Path) -> None:
     model = ScriptedToolModel(
         [

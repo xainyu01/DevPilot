@@ -746,15 +746,13 @@ class RunRepository:
                     run.pending_approval_json = event.data.get("approval")
                 elif event.type == RunEventType.APPROVAL_DECIDED:
                     run.pending_approval_json = None
-            if (
-                db.scalar(
-                    select(RunEventRow).where(
-                        RunEventRow.run_id == event.run_id,
-                        RunEventRow.sequence == event.sequence,
-                    )
+            existing_event = db.scalar(
+                select(RunEventRow).where(
+                    RunEventRow.run_id == event.run_id,
+                    RunEventRow.sequence == event.sequence,
                 )
-                is None
-            ):
+            )
+            if existing_event is None:
                 db.add(
                     RunEventRow(
                         id=event.event_id,
@@ -768,6 +766,12 @@ class RunRepository:
                         created_at=event.created_at,
                     )
                 )
+                if event.type == RunEventType.MODEL_OUTPUT and run is not None:
+                    call = event.data.get("call")
+                    if isinstance(call, dict):
+                        request_id = call.get("provider_request_id")
+                        if isinstance(request_id, str) and request_id:
+                            run.provider_request_id = request_id
 
     def finish_run(self, result: RunResult) -> None:
         # Reconcile the complete in-memory sequence as a final idempotent write.
@@ -799,6 +803,8 @@ class RunRepository:
             row = db.get(AgentRunRow, run_id)
             if row is None:
                 return None
+            model_calls = _model_calls_for_run(db, row)
+            tool_metrics = _tool_metrics_for_run(db, row.id)
             return {
                 "id": row.id,
                 "thread_id": row.thread_id,
@@ -813,9 +819,56 @@ class RunRepository:
                 "changes": row.changes_json,
                 "stop_reason": row.stop_reason,
                 "provider_request_id": row.provider_request_id,
+                "model_calls": model_calls,
+                "metrics": {
+                    "model_call_count": len(model_calls),
+                    **tool_metrics,
+                    "estimated_cost_usd": None,
+                },
                 "pending_approval": row.pending_approval_json,
                 "created_at": _as_utc(row.created_at).isoformat(),
                 "updated_at": _as_utc(row.updated_at).isoformat(),
+            }
+
+    def session_usage(self, thread_id: str) -> dict[str, Any]:
+        """Aggregate durable usage and call/tool counters for one Session thread."""
+        with self.database.session() as db:
+            rows = list(
+                db.scalars(
+                    select(AgentRunRow)
+                    .where(AgentRunRow.thread_id == thread_id)
+                    .order_by(AgentRunRow.created_at)
+                )
+            )
+            usage = {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cache_read_tokens": 0,
+                "cache_write_tokens": 0,
+                "total_tokens": 0,
+            }
+            model_call_count = 0
+            tool_call_count = 0
+            tool_success_count = 0
+            tool_failure_count = 0
+            for row in rows:
+                for key in usage:
+                    usage[key] += int((row.usage_json or {}).get(key, 0) or 0)
+                model_call_count += len(_model_calls_for_run(db, row))
+                tool_metrics = _tool_metrics_for_run(db, row.id)
+                tool_call_count += tool_metrics["tool_call_count"]
+                tool_success_count += tool_metrics["tool_success_count"]
+                tool_failure_count += tool_metrics["tool_failure_count"]
+            return {
+                "run_count": len(rows),
+                "usage": usage,
+                "metrics": {
+                    "model_call_count": model_call_count,
+                    "tool_call_count": tool_call_count,
+                    "tool_success_count": tool_success_count,
+                    "tool_failure_count": tool_failure_count,
+                    "estimated_cost_usd": None,
+                },
             }
 
     def list_events(self, run_id: str, *, after_sequence: int = 0) -> list[RunEvent]:
@@ -1143,6 +1196,53 @@ def _update_session_timestamp(session_id: str, *, summary: str | None = None) ->
     if summary is not None:
         values["summary"] = summary
     return update(SessionRow).where(SessionRow.id == session_id).values(**values)
+
+
+def _model_calls_for_run(db: Any, row: AgentRunRow) -> list[dict[str, Any]]:
+    calls: list[dict[str, Any]] = []
+    request = row.request_json if isinstance(row.request_json, dict) else {}
+    metadata = request.get("metadata", {})
+    selection = metadata.get("model_selection", {}) if isinstance(metadata, dict) else {}
+    selector_call = (
+        selection.get("selector_call") if isinstance(selection, dict) else None
+    )
+    if isinstance(selector_call, dict):
+        calls.append(_json_value(selector_call))
+    events = db.scalars(
+        select(RunEventRow)
+        .where(
+            RunEventRow.run_id == row.id,
+            RunEventRow.type == RunEventType.MODEL_OUTPUT.value,
+        )
+        .order_by(RunEventRow.sequence)
+    )
+    for event in events:
+        call = event.data_json.get("call") if isinstance(event.data_json, dict) else None
+        if isinstance(call, dict):
+            calls.append(_json_value(call))
+    return calls
+
+
+def _tool_metrics_for_run(db: Any, run_id: str) -> dict[str, int]:
+    rows = list(
+        db.scalars(
+            select(RunEventRow).where(
+                RunEventRow.run_id == run_id,
+                RunEventRow.type == RunEventType.TOOL_OUTPUT.value,
+            )
+        )
+    )
+    succeeded = sum(
+        1
+        for row in rows
+        if isinstance(row.data_json, dict)
+        and row.data_json.get("status") == "succeeded"
+    )
+    return {
+        "tool_call_count": len(rows),
+        "tool_success_count": succeeded,
+        "tool_failure_count": len(rows) - succeeded,
+    }
 
 
 def _json_value(value: Any) -> Any:

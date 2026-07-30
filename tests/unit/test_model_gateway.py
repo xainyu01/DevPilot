@@ -24,6 +24,13 @@ from packages.model_gateway import (
     ToolCallProtocolError,
     UnsupportedCapabilityError,
 )
+from packages.model_gateway.tool_calls import (
+    normalize_tool_calls,
+    parse_arguments,
+    provider_tool_names,
+    tool_definition,
+    validate_tool_arguments,
+)
 
 
 class ToolSpyModel:
@@ -364,4 +371,117 @@ async def test_malformed_or_unsafe_tool_calls_are_rejected(message: AIMessage) -
                 messages=[ChatMessage.from_text("user", "read")],
                 tools=[read_tool()],
             )
+        )
+
+
+@pytest.mark.parametrize("value", [None, 7, ["not", "an", "object"]])
+def test_tool_argument_parser_rejects_non_object_values(value) -> None:
+    with pytest.raises(ToolCallProtocolError, match="non-object arguments"):
+        parse_arguments(value, call_id="bad", name="file.read")
+
+
+@pytest.mark.parametrize("value", ["{", "[]", '"text"'])
+def test_tool_argument_parser_rejects_malformed_or_non_object_json(value: str) -> None:
+    with pytest.raises(ToolCallProtocolError):
+        parse_arguments(value, call_id="bad", name="file.read")
+
+
+def test_tool_argument_parser_accepts_json_object() -> None:
+    assert parse_arguments('{"path":"README.md"}', call_id="ok", name="file.read") == {
+        "path": "README.md"
+    }
+
+
+def test_tool_call_normalizer_rejects_missing_id_unknown_name_and_non_object() -> None:
+    missing_id = AIMessage(content="")
+    missing_id.tool_calls = [{"name": "file__read", "args": {}, "id": ""}]
+    with pytest.raises(ToolCallProtocolError, match="without an ID"):
+        normalize_tool_calls(missing_id, {"file__read": "file.read"})
+
+    unknown = AIMessage(content="")
+    unknown.tool_calls = [{"name": "other", "args": {}, "id": "call-1"}]
+    with pytest.raises(ToolCallProtocolError, match="unknown or unavailable"):
+        normalize_tool_calls(unknown, {"file__read": "file.read"})
+
+    non_object = AIMessage(content="")
+    non_object.tool_calls = ["bad"]
+    with pytest.raises(ToolCallProtocolError, match="non-object tool call"):
+        normalize_tool_calls(non_object, {"file__read": "file.read"})
+
+
+def test_tool_call_normalizer_accepts_provider_arguments_field() -> None:
+    message = AIMessage(content="")
+    message.tool_calls = [
+        {
+            "call_id": "call-1",
+            "name": "file__read",
+            "arguments": '{"path":"README.md"}',
+        }
+    ]
+    calls = normalize_tool_calls(message, {"file__read": "file.read"})
+    assert calls == [
+        ModelToolCall(
+            call_id="call-1",
+            name="file.read",
+            arguments={"path": "README.md"},
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    ("definition", "message"),
+    [
+        ({"description": "", "input_schema": {}}, "missing a name"),
+        ({"name": "file.read", "description": 3, "input_schema": {}}, "description"),
+        ({"name": "file.read", "description": "", "input_schema": []}, "schema"),
+    ],
+)
+def test_tool_definition_rejects_invalid_contract(definition: dict, message: str) -> None:
+    with pytest.raises(ToolCallProtocolError, match=message):
+        tool_definition(definition, anthropic=True)
+
+
+def test_openai_style_tool_definition_and_provider_name_collision() -> None:
+    definition = tool_definition(
+        {
+            "type": "function",
+            "function": {
+                "name": "file.read",
+                "description": "Read",
+                "parameters": {"type": "object"},
+            },
+        },
+        anthropic=False,
+        provider_name="file__read",
+    )
+    assert definition["function"]["name"] == "file__read"
+
+    with pytest.raises(ToolCallProtocolError, match="collide"):
+        provider_tool_names(
+            [
+                {"name": "file.read", "input_schema": {}},
+                {"name": "file__read", "input_schema": {}},
+            ]
+        )
+
+
+def test_tool_schema_validation_rejects_duplicate_invalid_and_unknown_definitions() -> None:
+    call = ModelToolCall(call_id="call-1", name="file.read", arguments={})
+    duplicate = [
+        {"name": "file.read", "input_schema": {}},
+        {"name": "file.read", "input_schema": {}},
+    ]
+    with pytest.raises(ToolCallProtocolError, match="duplicate"):
+        validate_tool_arguments([call], duplicate)
+
+    with pytest.raises(ToolCallProtocolError, match="invalid schema"):
+        validate_tool_arguments(
+            [call],
+            [{"name": "file.read", "input_schema": {"type": "not-a-json-type"}}],
+        )
+
+    with pytest.raises(ToolCallProtocolError, match="unknown or unavailable"):
+        validate_tool_arguments(
+            [ModelToolCall(call_id="call-2", name="file.other", arguments={})],
+            [read_tool()],
         )

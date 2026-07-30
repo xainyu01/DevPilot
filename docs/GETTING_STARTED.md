@@ -1,6 +1,6 @@
 # 初始化与首次运行
 
-本文是 DevPilot 当前工作区的首次启动手册。当前已完成 B0 基础骨架，下一步是 B1 LangGraph 内核。
+本文是 DevPilot 当前发布候选版本的首次启动与真实编程 Agent 使用手册。
 
 ## 1. 环境要求
 
@@ -18,15 +18,8 @@
 uv --cache-dir .uv-cache sync --group dev
 ```
 
-Git 仓库已经初始化，但尚未替用户创建首个提交。确认文件内容后可自行执行：
-
-```powershell
-git status --short
-git add .
-git commit -m "Initialize DevPilot scaffold"
-```
-
-如果希望先审阅变更，只执行 `git status --short` 和 `git diff --cached`，不要直接提交。
+现有仓库可能包含用户未提交修改。Agent 会把状态与 Diff 放入上下文，并要求先读取再修改；仍应在
+开始任务前自行检查 `git status --short`，不要把无关变化交给模型覆盖。
 
 当前机器的系统 uv 缓存路径存在冲突，因此命令显式使用工作区内的 `.uv-cache`。这仍然是 uv 的缓存，不是另一套依赖管理器。
 
@@ -69,7 +62,20 @@ Invoke-RestMethod http://127.0.0.1:8000/api/v1/progress
 
 API 文档地址：`http://127.0.0.1:8000/docs`。
 
-## 5. 查看进度与生成交接
+## 5. 注册项目并运行编码任务
+
+1. 使用 `admin`、`admin1`、`admin2` 或 `admin3` 登录 Web 工作台。
+2. 注册一个已存在且位于允许工作区内的项目目录。
+3. 创建绑定该项目的 Session。
+4. 选择支持 Tool Calling 且位于管理员 `allowed_models` 范围内的 endpoint/model。
+5. 提交任务和可验证的 acceptance criteria。
+6. 在时间线检查实际模型、Tool Call/Result、测试、文件变化、Token 与 verification。
+7. 若出现审批卡片，核对工具、参数和风险后批准或拒绝；刷新后仍可从持久事件恢复。
+
+Run 只在服务器验证工作区变化、必需文件、未处理工具错误和成功 `test.run` 证据后标记为
+`completed`。已有成果但仍未满足条件时为 `partial`，不会伪装成完成。
+
+## 6. 查看进度与生成交接
 
 ```powershell
 uv --cache-dir .uv-cache run devpilot progress
@@ -79,6 +85,8 @@ uv --cache-dir .uv-cache run devpilot handover write --reason paused
 
 交接文档会生成在 `docs/handovers/`，并包含当前批次、完成项、进行中事项、阻塞项、恢复检查清单和工作区快照。
 
-## 6. 当前边界
+## 7. 当前边界
 
-B0 已完成 API、CLI、contracts、进度源和交接 Agent。计划书阶段 0 中的 React Web/Tauri 连通骨架尚未实现；它不会被当前 uv-only 批次伪装成已完成。详见 [下一步执行指南](NEXT_STEPS.md) 与 [B1 设计说明](architecture/BATCH-01-LANGGRAPH-CORE.md)。
+B8-R1～R7 的真实 Agent 纠偏已经完成。当前工作站没有 Docker、docker-compose 或 Podman，因此
+容器配置和启动健康检查仍是明确外部阻塞，整个 B8 发布批次不会在该验收完成前标记为全部完成。
+Linux/macOS 适配器和桌面壳层仍返回计划中声明的未实现状态。

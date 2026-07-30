@@ -90,6 +90,10 @@ class DeleteThenFinishModel(ChatModelAdapter):
                 ModelStopReason.TOOL_CALLS if calls else ModelStopReason.TEXT_END
             ),
             finish_reason="tool_calls" if calls else "stop",
+            response_metadata={
+                "provider_request_id": f"provider-request-{self.calls}",
+                "provider_model": "delete-model-returned",
+            },
         )
 
 
@@ -171,6 +175,18 @@ async def test_waiting_approval_survives_runtime_restart(tmp_path: Path) -> None
     persisted = RunRepository(database).get(request.run_id)
     assert persisted is not None
     assert persisted["status"] == "completed"
+    assert persisted["provider_request_id"] == "provider-request-2"
+    assert [call["provider_request_id"] for call in persisted["model_calls"]] == [
+        "provider-request-1",
+        "provider-request-2",
+    ]
+    assert persisted["metrics"] == {
+        "model_call_count": 2,
+        "tool_call_count": 1,
+        "tool_success_count": 1,
+        "tool_failure_count": 0,
+        "estimated_cost_usd": None,
+    }
     tool_outputs = [
         event
         for event in RunRepository(database).list_events(request.run_id)

@@ -61,3 +61,24 @@ Token、文件变化和终态，并从事件 API 恢复刷新前的时间线。R
 
 最终 `verification` 与 Run 结果一起持久化。API、WebSocket 和 Web 时间线都识别 `run.partial`；
 因此刷新或重连后看到的终态、问题列表、测试次数和工作区证据与服务器最终判定一致。
+
+## R7 调用可观测性与真实验收
+
+每个模型回合先发出 `model.call.started`，随后以 `model.output` 闭合。持久事件包含 endpoint ID、
+协议、请求与供应商返回模型、provider request ID、input/output/cache Token、首包与总耗时、
+finish/stop reason、selector、重试/错误类型、Tool Call 数和费用占位。失败回合不保存供应商错误
+正文，未知费用恒为 `null`。Run 与 Session Usage API 从持久事件聚合，不依赖内存状态。
+
+Run 创建请求可用 `capability_limit` 进一步收窄 RBAC 权限。默认 `test.run` schema 不向模型暴露
+任意 `command`，只允许服务器发现的测试 kind；只有管理员配置精确 allow-list 时才开放命令字段。
+并行失败工具按一个模型批次计为一次无进展，使模型能获得整批错误并修复，而不会因单轮三个错误被
+提前终止。
+
+真实 E2E 驱动只负责创建/清理精确隔离目录、调用 FastAPI/WebSocket 和验证结果。Event Lens 的
+Python、unittest、README 和 JSONL 示例全部由 DeepSeek 的原生 Tool Calls 写入。验收还在同一
+Session 完成增量修改，并由 Anthropic-compatible endpoint 执行独立只读 Tool Call。
+
+供应商 Tool Call 的名称映射、参数解析与 JSON Schema 校验集中在
+`packages/model_gateway/tool_calls.py`，与供应商 SDK 转换层解耦。针对畸形 JSON、非对象参数、
+缺失调用 ID、未知工具、名称碰撞和非法/重复 Schema 的独立覆盖率为 99%，避免由大适配器文件
+的非解析分支掩盖安全门禁。

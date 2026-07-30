@@ -1,6 +1,8 @@
 # DevPilot
 
-DevPilot 是一个本地优先的多 Agent 研发助手，提供 FastAPI 服务、Typer CLI 和 React/Vite Web 工作台。
+DevPilot 是一个本地优先的编程 Agent，提供 FastAPI 服务、Typer CLI 和 React/Vite Web 工作台。
+模型通过原生 Tool Calling 在注册项目内执行读、写、测试和受审批操作；服务端以工作区与测试证据
+独立验证完成状态，不接受模型仅用文字声明成功。
 
 当前版本为 `0.1.0rc1`，重点支持 Windows 本地运行；Linux/macOS 保留平台接口，运行时验收留待后续批次。
 
@@ -27,7 +29,10 @@ uv --cache-dir .uv-cache run devpilot project list
 uv --cache-dir .uv-cache run pytest
 uv --cache-dir .uv-cache run ruff check .
 uv --cache-dir .uv-cache run devpilot doctor
-pnpm --dir apps/web build
+Push-Location apps/web
+& node_modules/.bin/tsc.cmd -b
+& node_modules/.bin/vite.cmd build
+Pop-Location
 ```
 
 本地运行数据位于 `.devpilot/`，不应提交到仓库。完整的标识迁移说明见 [命名迁移](docs/BRANDING_MIGRATION.md)。
@@ -58,6 +63,26 @@ pnpm --dir apps/web build
 API Key 明文，因此该目录应只允许当前系统用户访问，且不得复制到提交、日志或共享文件中；
 更推荐把 `api_key` 留空并使用环境变量。字段的完整 JSON 格式、变量优先级和示例见
 [本地运行设置](docs/LOCAL_SETTINGS.md)。
+
+## 真实编程 Agent
+
+登录 Web 工作台后，先注册一个已存在的项目目录并创建 Session，再选择允许 Tool Calling 的
+endpoint/model。运行会持久化计划、逐次模型调用、Tool Call/Result、审批、工作区变化、测试、
+Token 和独立 verification；刷新页面或服务重启后仍可查询和恢复。
+
+高风险的 Shell、Git 写入和删除操作必须经过策略与人工审批。每次 Run 还可用
+`capability_limit` 进一步收窄当前 RBAC 权限，不能借此扩权。`test.run` 默认只暴露服务器发现的
+测试类型；只有管理员配置 allow-list 时才允许模型传入明确命令。
+
+本地 DeepSeek 真实验收可执行：
+
+```powershell
+uv --cache-dir .uv-cache run python scripts/deepseek_event_lens_e2e.py
+```
+
+脚本从精确的忽略目录创建空项目，通过 FastAPI/WebSocket 让 DeepSeek 自主生成文件并运行测试，
+随后在同一 Session 增量修改，再以 Anthropic-compatible endpoint 做只读冒烟。脚本不会向验收
+项目代写代码，也不会输出 API Key；脱敏结果保存在 `.devpilot/agent-e2e/results/`。
 
 ## 文档
 

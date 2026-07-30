@@ -158,6 +158,22 @@ uv --cache-dir .uv-cache run python scripts/deepseek_tool_call_smoke.py
 
 脚本只输出 endpoint、模型、usage、请求标识和模型生成的工具调用，不输出 API Key。
 
+真实编程验收使用本地忽略配置中的 `deepseek-openai` 与 `deepseek-anthropic`，两者均应声明
+`tool_capability: supported`：
+
+```powershell
+uv --cache-dir .uv-cache run python scripts/deepseek_event_lens_e2e.py
+```
+
+该脚本让 OpenAI-compatible endpoint 在空目录通过 `file.mkdir/file.write/test.run` 创建 Event
+Lens，再在同一 Session 增量修改；Anthropic-compatible endpoint 只执行 `file.read` 冒烟。
+验收摘要只记录 endpoint/model、provider request ID、usage、工具顺序、变化和测试结果，保存在
+Git 忽略目录，不包含 Key。
+
+每次 Agent 模型调用都会记录实际协议、请求/返回模型、缓存与普通 Token、延迟和 finish reason。
+自动选模的 selector 调用也计入 Run Usage；它只能从 `allowed_models` 选择，失败时的确定性回退
+仍不能越过允许集合。未知定价保持 `null`。
+
 ## 密钥与用户安全
 
 Web 和 `GET /api/v1/settings` 只返回 `api_key_configured` 与来源，不返回 API Key 原文。当前版本为了满足

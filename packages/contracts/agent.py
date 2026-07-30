@@ -148,6 +148,8 @@ class TokenUsage(BaseModel):
 
     input_tokens: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
+    cache_read_tokens: int = Field(default=0, ge=0)
+    cache_write_tokens: int = Field(default=0, ge=0)
     total_tokens: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
@@ -262,6 +264,7 @@ class RunEventType(StrEnum):
     NODE_STARTED = "node.started"
     NODE_COMPLETED = "node.completed"
     PLAN_CREATED = "plan.created"
+    MODEL_CALL_STARTED = "model.call.started"
     MODEL_DELTA = "model.delta"
     MODEL_OUTPUT = "model.output"
     TOOL_REQUESTED = "tool.requested"

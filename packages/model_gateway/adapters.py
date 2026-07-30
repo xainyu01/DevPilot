@@ -3,14 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
-import re
 from collections.abc import AsyncIterator
 from typing import Any
 
-from jsonschema import Draft202012Validator
-from jsonschema.exceptions import SchemaError, ValidationError
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from pydantic import SecretStr
@@ -34,6 +30,14 @@ from packages.contracts import (
 
 from .errors import AdapterNotImplementedError, ToolCallProtocolError
 from .gateway import ChatModelAdapter
+from .tool_calls import (
+    normalize_tool_calls,
+    parse_arguments,
+    provider_tool_names,
+    tool_definition,
+    tool_schema_parts,
+    validate_tool_arguments,
+)
 
 
 def _message_text(message: BaseMessage) -> str:
@@ -61,10 +65,32 @@ def _usage_from_message(message: BaseMessage, *, input_tokens: int = 0) -> Token
     if "prompt_tokens" in usage:
         input_count = int(usage.get("prompt_tokens") or input_count)
     output_count = int(usage.get("output_tokens", usage.get("completion_tokens", 0)) or 0)
+    input_details = usage.get("input_token_details", {})
+    input_details = input_details if isinstance(input_details, dict) else {}
+    cache_read = int(
+        input_details.get(
+            "cache_read",
+            usage.get("prompt_cache_hit_tokens", usage.get("cache_read_input_tokens", 0)),
+        )
+        or 0
+    )
+    cache_write = int(
+        input_details.get(
+            "cache_creation",
+            usage.get("cache_creation_input_tokens", 0),
+        )
+        or 0
+    )
     total = int(
         usage.get("total_tokens", usage.get("total", input_count + output_count)) or 0
     )
-    return TokenUsage(input_tokens=input_count, output_tokens=output_count, total_tokens=total)
+    return TokenUsage(
+        input_tokens=input_count,
+        output_tokens=output_count,
+        cache_read_tokens=cache_read,
+        cache_write_tokens=cache_write,
+        total_tokens=total,
+    )
 
 
 def _finish_reason(message: BaseMessage) -> str | None:
@@ -85,165 +111,6 @@ def _stop_reason(finish_reason: str | None, *, has_tool_calls: bool = False) -> 
     if finish_reason in {"error", "provider_error"}:
         return ModelStopReason.PROVIDER_ERROR
     return ModelStopReason.UNKNOWN
-
-
-def _parse_arguments(value: Any, *, call_id: str, name: str) -> dict[str, Any]:
-    if isinstance(value, dict):
-        return value
-    if not isinstance(value, str):
-        raise ToolCallProtocolError(
-            f"tool call {call_id!r} for {name!r} has non-object arguments"
-        )
-    try:
-        parsed = json.loads(value)
-    except json.JSONDecodeError as exc:
-        raise ToolCallProtocolError(
-            f"tool call {call_id!r} for {name!r} has malformed JSON arguments"
-        ) from exc
-    if not isinstance(parsed, dict):
-        raise ToolCallProtocolError(
-            f"tool call {call_id!r} for {name!r} arguments must decode to an object"
-        )
-    return parsed
-
-
-def _normalize_tool_calls(
-    message: BaseMessage,
-    provider_to_canonical: dict[str, str],
-) -> list[ModelToolCall]:
-    invalid = getattr(message, "invalid_tool_calls", None) or []
-    if invalid:
-        raise ToolCallProtocolError("provider returned one or more invalid tool calls")
-    raw_calls = list(getattr(message, "tool_calls", None) or [])
-    if not raw_calls and isinstance(message.content, list):
-        raw_calls = [
-            {
-                "id": item.get("id"),
-                "name": item.get("name"),
-                "args": item.get("input"),
-            }
-            for item in message.content
-            if isinstance(item, dict) and item.get("type") == "tool_use"
-        ]
-    normalized: list[ModelToolCall] = []
-    seen: set[str] = set()
-    for raw in raw_calls:
-        if not isinstance(raw, dict):
-            raise ToolCallProtocolError("provider returned a non-object tool call")
-        call_id = raw.get("id") or raw.get("call_id")
-        provider_name = raw.get("name")
-        if not isinstance(call_id, str) or not call_id.strip():
-            raise ToolCallProtocolError("provider returned a tool call without an ID")
-        if call_id in seen:
-            raise ToolCallProtocolError(f"provider returned duplicate tool call ID {call_id!r}")
-        if not isinstance(provider_name, str) or not provider_name.strip():
-            raise ToolCallProtocolError(f"tool call {call_id!r} is missing a tool name")
-        name = provider_to_canonical.get(provider_name)
-        if name is None:
-            raise ToolCallProtocolError(
-                f"provider requested unknown or unavailable tool {provider_name!r}"
-            )
-        arguments = _parse_arguments(
-            raw.get("args", raw.get("arguments", {})),
-            call_id=call_id,
-            name=name,
-        )
-        seen.add(call_id)
-        normalized.append(
-            ModelToolCall(call_id=call_id, name=name, arguments=arguments)
-        )
-    return normalized
-
-
-def _tool_definition(
-    raw: dict[str, Any],
-    *,
-    anthropic: bool,
-    provider_name: str | None = None,
-) -> dict[str, Any]:
-    if raw.get("type") == "function" and isinstance(raw.get("function"), dict):
-        function = raw["function"]
-        name = function.get("name")
-        description = function.get("description", "")
-        schema = function.get("parameters", {"type": "object", "properties": {}})
-    else:
-        name = raw.get("name")
-        description = raw.get("description", "")
-        schema = raw.get(
-            "input_schema",
-            raw.get("parameters", {"type": "object", "properties": {}}),
-        )
-    if not isinstance(name, str) or not name.strip():
-        raise ToolCallProtocolError("tool definition is missing a name")
-    if not isinstance(description, str):
-        raise ToolCallProtocolError(f"tool definition {name!r} has a non-string description")
-    if not isinstance(schema, dict):
-        raise ToolCallProtocolError(f"tool definition {name!r} has a non-object schema")
-    external_name = provider_name or name
-    if anthropic:
-        return {"name": external_name, "description": description, "input_schema": schema}
-    return {
-        "type": "function",
-        "function": {
-            "name": external_name,
-            "description": description,
-            "parameters": schema,
-        },
-    }
-
-
-def _tool_schema_parts(raw: dict[str, Any]) -> tuple[str, dict[str, Any]]:
-    normalized = _tool_definition(raw, anthropic=True)
-    return str(normalized["name"]), normalized["input_schema"]
-
-
-def _provider_tool_names(
-    definitions: list[dict[str, Any]],
-) -> tuple[dict[str, str], dict[str, str]]:
-    canonical_to_provider: dict[str, str] = {}
-    provider_to_canonical: dict[str, str] = {}
-    for definition in definitions:
-        canonical, _ = _tool_schema_parts(definition)
-        provider_name = re.sub(r"[^A-Za-z0-9_-]", "__", canonical)
-        if not provider_name or not re.fullmatch(r"[A-Za-z0-9_-]+", provider_name):
-            raise ToolCallProtocolError(f"tool name {canonical!r} cannot be provider-encoded")
-        other = provider_to_canonical.get(provider_name)
-        if other is not None and other != canonical:
-            raise ToolCallProtocolError(
-                f"tool names {other!r} and {canonical!r} collide at provider boundary"
-            )
-        canonical_to_provider[canonical] = provider_name
-        provider_to_canonical[provider_name] = canonical
-    return canonical_to_provider, provider_to_canonical
-
-
-def _validate_tool_arguments(
-    calls: list[ModelToolCall],
-    definitions: list[dict[str, Any]],
-) -> None:
-    schemas: dict[str, dict[str, Any]] = {}
-    for definition in definitions:
-        name, schema = _tool_schema_parts(definition)
-        if name in schemas:
-            raise ToolCallProtocolError(f"duplicate tool definition {name!r}")
-        try:
-            Draft202012Validator.check_schema(schema)
-        except SchemaError as exc:
-            raise ToolCallProtocolError(f"tool definition {name!r} has an invalid schema") from exc
-        schemas[name] = schema
-    for call in calls:
-        schema = schemas.get(call.name)
-        if schema is None:
-            raise ToolCallProtocolError(
-                f"provider requested unknown or unavailable tool {call.name!r}"
-            )
-        try:
-            Draft202012Validator(schema).validate(call.arguments)
-        except ValidationError as exc:
-            path = ".".join(str(item) for item in exc.absolute_path) or "<root>"
-            raise ToolCallProtocolError(
-                f"tool call {call.call_id!r} arguments fail schema validation at {path}"
-            ) from exc
 
 
 class LangChainAdapter(ChatModelAdapter):
@@ -320,12 +187,12 @@ class LangChainAdapter(ChatModelAdapter):
         raise NotImplementedError
 
     def _tool_schemas(self, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        canonical_to_provider, _ = _provider_tool_names(tools)
+        canonical_to_provider, _ = provider_tool_names(tools)
         return [
-            _tool_definition(
+            tool_definition(
                 tool,
                 anthropic=False,
-                provider_name=canonical_to_provider[_tool_schema_parts(tool)[0]],
+                provider_name=canonical_to_provider[tool_schema_parts(tool)[0]],
             )
             for tool in tools
         ]
@@ -365,7 +232,7 @@ class LangChainAdapter(ChatModelAdapter):
         messages: list[ChatMessage],
         tools: list[dict[str, Any]] | None = None,
     ) -> list[BaseMessage]:
-        canonical_to_provider, _ = _provider_tool_names(tools or [])
+        canonical_to_provider, _ = provider_tool_names(tools or [])
         converted: list[BaseMessage] = []
         for message in messages:
             parts = [self._content_for_block(block) for block in message.content]
@@ -432,9 +299,9 @@ class LangChainAdapter(ChatModelAdapter):
         if not isinstance(message, BaseMessage):
             message = AIMessage(content=str(message))
         text = _message_text(message)
-        _, provider_to_canonical = _provider_tool_names(request.tools)
-        tool_calls = _normalize_tool_calls(message, provider_to_canonical)
-        _validate_tool_arguments(tool_calls, request.tools)
+        _, provider_to_canonical = provider_tool_names(request.tools)
+        tool_calls = normalize_tool_calls(message, provider_to_canonical)
+        validate_tool_arguments(tool_calls, request.tools)
         response_message = ChatMessage.from_text("assistant", text or "")
         metadata = dict(getattr(message, "response_metadata", {}) or {})
         if message.id:
@@ -475,9 +342,22 @@ class LangChainAdapter(ChatModelAdapter):
             usage = TokenUsage(
                 input_tokens=max(usage.input_tokens, chunk_usage.input_tokens),
                 output_tokens=max(usage.output_tokens, chunk_usage.output_tokens),
+                cache_read_tokens=max(
+                    usage.cache_read_tokens,
+                    chunk_usage.cache_read_tokens,
+                ),
+                cache_write_tokens=max(
+                    usage.cache_write_tokens,
+                    chunk_usage.cache_write_tokens,
+                ),
                 total_tokens=max(usage.total_tokens, chunk_usage.total_tokens),
             )
             metadata = dict(getattr(chunk, "response_metadata", {}) or {})
+            if chunk.id:
+                metadata.setdefault("provider_request_id", chunk.id)
+            returned_model = metadata.get("model_name") or metadata.get("model")
+            if returned_model:
+                metadata.setdefault("provider_model", returned_model)
             response_metadata.update(metadata)
             finish_reason = _finish_reason(chunk) or finish_reason
             text = _message_text(chunk)
@@ -541,7 +421,7 @@ class LangChainAdapter(ChatModelAdapter):
                 raise ToolCallProtocolError(
                     f"streamed tool call {call_id!r} is missing a tool name"
                 )
-            _, provider_to_canonical = _provider_tool_names(request.tools)
+            _, provider_to_canonical = provider_tool_names(request.tools)
             canonical_name = provider_to_canonical.get(name)
             if canonical_name is None:
                 raise ToolCallProtocolError(
@@ -550,13 +430,13 @@ class LangChainAdapter(ChatModelAdapter):
             call = ModelToolCall(
                 call_id=call_id,
                 name=canonical_name,
-                arguments=_parse_arguments(
+                arguments=parse_arguments(
                     raw["arguments"] or "{}",
                     call_id=call_id,
                     name=canonical_name,
                 ),
             )
-            _validate_tool_arguments([call], request.tools)
+            validate_tool_arguments([call], request.tools)
             completed_calls.append(call)
             seen_ids.add(call_id)
             yield ModelStreamEvent(
@@ -682,12 +562,12 @@ class AnthropicAdapter(LangChainAdapter):
         return ChatAnthropic(**kwargs)
 
     def _tool_schemas(self, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        canonical_to_provider, _ = _provider_tool_names(tools)
+        canonical_to_provider, _ = provider_tool_names(tools)
         return [
-            _tool_definition(
+            tool_definition(
                 tool,
                 anthropic=True,
-                provider_name=canonical_to_provider[_tool_schema_parts(tool)[0]],
+                provider_name=canonical_to_provider[tool_schema_parts(tool)[0]],
             )
             for tool in tools
         ]

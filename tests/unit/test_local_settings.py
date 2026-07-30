@@ -216,6 +216,48 @@ def test_settings_policy_validation_errors(
             '"agent":{"mode":"invalid","allowed_models":[]}}}',
             "requires endpoint_id",
         ),
+        (
+            '{"models":{"endpoints":[],"default":{"endpoint_id":"x","model":"m"},'
+            '"agent":[]}}',
+            "models.agent must",
+        ),
+        (
+            '{"models":{"endpoints":[],"default":{"endpoint_id":"x","model":"m"},'
+            '"agent":{"allowed_models":"x"}}}',
+            "allowed_models must",
+        ),
+        (
+            '{"models":{"endpoints":["bad"],'
+            '"default":{"endpoint_id":"x","model":"m"}}}',
+            "endpoint must",
+        ),
+        (
+            '{"models":{"endpoints":[{"id":"x","name":"X","provider":"openai",'
+            '"base_url":1,"models":["m"]}],"default":{"endpoint_id":"x","model":"m"}}}',
+            "base_url must",
+        ),
+        (
+            '{"models":{"endpoints":[{"id":"x","name":"X","provider":"openai",'
+            '"api_key":1,"models":["m"]}],"default":{"endpoint_id":"x","model":"m"}}}',
+            "api_key must",
+        ),
+        (
+            '{"models":{"endpoints":[{"id":"x","name":"X","provider":"openai",'
+            '"models":"m"}],"default":{"endpoint_id":"x","model":"m"}}}',
+            "models must be an array",
+        ),
+        (
+            '{"models":{"endpoints":[{"id":"x","name":"X","provider":"openai",'
+            '"models":["m"],"enabled":"yes"}],'
+            '"default":{"endpoint_id":"x","model":"m"}}}',
+            "enabled must",
+        ),
+        (
+            '{"models":{"endpoints":[{"id":"x","name":"X","provider":"openai",'
+            '"models":["m"],"tool_capability":"maybe"}],'
+            '"default":{"endpoint_id":"x","model":"m"}}}',
+            "tool_capability must",
+        ),
         ('{"model":[]}', "model must"),
         ('{"model":{"provider":1,"name":"model"}}', "must be strings"),
     ],

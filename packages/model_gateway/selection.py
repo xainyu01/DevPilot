@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 
-from packages.contracts import ChatMessage, ChatRequest
+from packages.contracts import ChatMessage, ChatRequest, TokenUsage
 from packages.local_settings import LocalSettings, ModelTarget
 
 from .gateway import ModelGateway
@@ -19,6 +20,8 @@ class RuntimeModelSelection:
     reason: str
     selector: ModelTarget | None = None
     fallback_used: bool = False
+    selector_usage: TokenUsage = field(default_factory=TokenUsage)
+    selector_call: dict[str, object] | None = None
 
 
 class ModelChoiceError(ValueError):
@@ -98,6 +101,7 @@ class ModelChoiceService:
             f"Allowed candidates: {json.dumps(candidates, ensure_ascii=False)}\n"
             f"Task: {task_text}"
         )
+        started = time.perf_counter()
         try:
             response = await self.gateway.invoke(
                 ChatRequest(
@@ -121,6 +125,26 @@ class ModelChoiceService:
                 mode="auto",
                 reason=reason,
                 selector=selector,
+                selector_usage=response.usage,
+                selector_call={
+                    "kind": "selector",
+                    "endpoint_id": selector.endpoint_id,
+                    "requested_model": selector.model,
+                    "returned_model": response.response_metadata.get(
+                        "provider_model", response.model
+                    ),
+                    "provider_request_id": response.response_metadata.get(
+                        "provider_request_id"
+                    ),
+                    "usage": response.usage.model_dump(mode="json"),
+                    "duration_ms": round((time.perf_counter() - started) * 1000, 3),
+                    "finish_reason": response.finish_reason,
+                    "stop_reason": response.stop_reason.value,
+                    "retry_count": 0,
+                    "error": None,
+                    "tool_call_count": len(response.tool_calls),
+                    "estimated_cost_usd": None,
+                },
             )
         except Exception as exc:
             # Selection must stay available even if a vendor does not support strict JSON output.
@@ -135,6 +159,21 @@ class ModelChoiceService:
                 reason=reason,
                 selector=selector,
                 fallback_used=True,
+                selector_call={
+                    "kind": "selector",
+                    "endpoint_id": selector.endpoint_id,
+                    "requested_model": selector.model,
+                    "returned_model": None,
+                    "provider_request_id": None,
+                    "usage": TokenUsage().model_dump(mode="json"),
+                    "duration_ms": round((time.perf_counter() - started) * 1000, 3),
+                    "finish_reason": None,
+                    "stop_reason": "provider_error",
+                    "retry_count": 0,
+                    "error": {"type": type(exc).__name__},
+                    "tool_call_count": 0,
+                    "estimated_cost_usd": None,
+                },
             )
 
 

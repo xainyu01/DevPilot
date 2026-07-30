@@ -153,6 +153,7 @@ def test_local_web_first_conversation_and_runtime_logs(tmp_path: Path) -> None:
         run = client.post(
             f"/api/v1/sessions/{session['id']}/runs",
             json={
+                "capability_limit": ["workspace.read", "invented.capability"],
                 "message": {
                     "role": "user",
                     "content": [{"type": "text", "text": "hello from the Web workbench"}],
@@ -164,6 +165,8 @@ def test_local_web_first_conversation_and_runtime_logs(tmp_path: Path) -> None:
         run_id = run.json()["context"]["run_id"]
         bound_runtime = web_app.state.agent_runtimes[("first-web-thread", run_id)]
         assert bound_runtime.tool_runtime.workspace_root == project_root.resolve()
+        handle = bound_runtime._handles[("first-web-thread", run_id)]
+        assert handle.request.metadata["capabilities"] == ["workspace.read"]
 
         logs = client.get("/api/v1/runtime/logs").json()
         events = [item["event"] for item in logs]
@@ -305,6 +308,9 @@ def test_background_run_query_usage_and_idempotent_reconnect(tmp_path: Path) -> 
 
         events = client.get("/api/v1/runs/background-run/events").json()
         usage = client.get("/api/v1/runs/background-run/usage").json()
+        session_usage = client.get(
+            f"/api/v1/sessions/{session['id']}/usage"
+        ).json()
         changes = client.get("/api/v1/runs/background-run/changes").json()
         repeated = client.post(
             f"/api/v1/sessions/{session['id']}/runs",
@@ -314,6 +320,13 @@ def test_background_run_query_usage_and_idempotent_reconnect(tmp_path: Path) -> 
 
         assert events[-1]["type"] == "run.completed"
         assert usage["usage"]["total_tokens"] > 0
+        assert len(usage["model_calls"]) == 1
+        assert usage["model_calls"][0]["protocol"] == "fake"
+        assert usage["metrics"]["model_call_count"] == 1
+        assert usage["metrics"]["estimated_cost_usd"] is None
+        assert session_usage["run_count"] == 1
+        assert session_usage["usage"] == usage["usage"]
+        assert session_usage["metrics"] == usage["metrics"]
         assert changes == {"run_id": "background-run", "changes": []}
         assert repeated.json()["id"] == "background-run"
         assert len(after_reconnect) == len(events)

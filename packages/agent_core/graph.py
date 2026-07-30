@@ -22,6 +22,7 @@ from packages.contracts import (
     ChatRequest,
     ChatResponse,
     Checkpoint,
+    ModelStopReason,
     RunContext,
     RunEvent,
     RunEventType,
@@ -276,7 +277,24 @@ def build_agent_graph(
             finish_reason = None
             stop_reason = None
             response_metadata: dict[str, Any] = {}
+            call_started = time.perf_counter()
+            first_token_latency_ms: float | None = None
+            call_context = _model_call_context(current, request, iteration + 1)
+            emit(
+                RunEventType.MODEL_CALL_STARTED,
+                state=current,
+                node="call_model",
+                data={
+                    **call_context,
+                    "started_monotonic": call_started,
+                },
+            )
             async for event in gateway.stream(request):
+                if first_token_latency_ms is None:
+                    first_token_latency_ms = round(
+                        (time.perf_counter() - call_started) * 1000,
+                        3,
+                    )
                 output.append(event.text)
                 if event.usage is not None:
                     final_usage = event.usage
@@ -359,6 +377,35 @@ def build_agent_graph(
                     "provider": request.provider,
                     "model": request.model,
                     "response_metadata": _safe_event_value(response_metadata),
+                    "call": {
+                        **call_context,
+                        "returned_model": response_metadata.get(
+                            "provider_model",
+                            response_metadata.get(
+                                "model_name",
+                                response_metadata.get("model", request.model),
+                            ),
+                        ),
+                        "provider_request_id": response_metadata.get(
+                            "provider_request_id"
+                        ),
+                        "usage": final_usage.model_dump(mode="json"),
+                        "first_token_latency_ms": first_token_latency_ms,
+                        "duration_ms": round(
+                            (time.perf_counter() - call_started) * 1000,
+                            3,
+                        ),
+                        "finish_reason": finish_reason,
+                        "stop_reason": (
+                            stop_reason.value
+                            if isinstance(stop_reason, ModelStopReason)
+                            else str(stop_reason or ModelStopReason.UNKNOWN.value)
+                        ),
+                        "retry_count": 0,
+                        "error": None,
+                        "tool_call_count": len(model_tool_calls),
+                        "estimated_cost_usd": None,
+                    },
                 },
             )
             return {
@@ -388,6 +435,7 @@ def build_agent_graph(
             messages = list(current.get("messages", []))
             history = list(current.get("tool_history", []))
             no_progress = int(current.get("consecutive_no_progress", 0))
+            batch_made_progress = False
             for raw_call in current.get("tool_calls", []):
                 call = ToolCall.model_validate(raw_call)
                 if any(
@@ -477,6 +525,7 @@ def build_agent_graph(
                     sort_keys=True,
                 )
                 history.append(fingerprint)
+                batch_made_progress = batch_made_progress or result.status == "succeeded"
                 if len(history) >= 3 and len(set(history[-3:])) == 1:
                     return {
                         "tool_results": results,
@@ -490,21 +539,21 @@ def build_agent_graph(
                             "message": "same tool call and result repeated three times",
                         },
                     }
-                no_progress = no_progress + 1 if result.status != "succeeded" else 0
-                if no_progress >= 3:
-                    return {
-                        "tool_results": results,
-                        "messages": messages,
-                        "tool_calls": [],
-                        "tool_history": history,
-                        "consecutive_no_progress": no_progress,
-                        "status": RunStatus.FAILED,
-                        "stop_reason": "consecutive_no_progress",
-                        "error": {
-                            "code": "agent_no_progress",
-                            "message": "three consecutive tool calls made no progress",
-                        },
-                    }
+            no_progress = 0 if batch_made_progress else no_progress + 1
+            if no_progress >= 3:
+                return {
+                    "tool_results": results,
+                    "messages": messages,
+                    "tool_calls": [],
+                    "tool_history": history,
+                    "consecutive_no_progress": no_progress,
+                    "status": RunStatus.FAILED,
+                    "stop_reason": "consecutive_no_progress",
+                    "error": {
+                        "code": "agent_no_progress",
+                        "message": "three consecutive tool batches made no progress",
+                    },
+                }
             return {
                 "tool_results": results,
                 "messages": messages,
@@ -745,10 +794,31 @@ def _task_text(messages: list[ChatMessage]) -> str:
     )
 
 
+def _model_call_context(
+    state: AgentState,
+    request: ChatRequest,
+    iteration: int,
+) -> dict[str, Any]:
+    selection = state.get("metadata", {}).get("model_selection", {})
+    selection = selection if isinstance(selection, dict) else {}
+    return {
+        "kind": "agent",
+        "iteration": iteration,
+        "endpoint_id": str(request.provider),
+        "protocol": selection.get("protocol", "unknown"),
+        "requested_model": request.model,
+        "selector": _safe_event_value(selection.get("selector")),
+        "selection_mode": selection.get("mode", "manual"),
+        "fallback_used": bool(selection.get("fallback_used", False)),
+    }
+
+
 def _add_usage(first: TokenUsage, second: TokenUsage) -> TokenUsage:
     return TokenUsage(
         input_tokens=first.input_tokens + second.input_tokens,
         output_tokens=first.output_tokens + second.output_tokens,
+        cache_read_tokens=first.cache_read_tokens + second.cache_read_tokens,
+        cache_write_tokens=first.cache_write_tokens + second.cache_write_tokens,
         total_tokens=first.total_tokens + second.total_tokens,
     )
 
@@ -799,6 +869,12 @@ class AgentRuntime:
         return handle
 
     def _state_from_request(self, request: RunRequest) -> AgentState:
+        model_selection = request.metadata.get("model_selection", {})
+        selector_usage = (
+            TokenUsage.model_validate(model_selection.get("selector_usage", {}))
+            if isinstance(model_selection, dict)
+            else TokenUsage()
+        )
         return {
             "thread_id": request.thread_id,
             "run_id": request.run_id,
@@ -822,8 +898,8 @@ class AgentRuntime:
             "verification": {},
             "verification_attempts": 0,
             "verification_fingerprints": [],
-            "token_usage": TokenUsage(),
-            "usage": TokenUsage(),
+            "token_usage": selector_usage,
+            "usage": selector_usage,
             "stop_reason": None,
             "status": RunStatus.RUNNING,
             "cancel_requested": False,
@@ -1024,6 +1100,7 @@ class AgentRuntime:
                 status=RunStatus.FAILED,
                 sequence=handle.emitter.sequence,
             )
+            _emit_failed_model_call(handle, exc)
             handle.emitter.emit(
                 RunEventType.RUN_FAILED,
                 status=RunStatus.FAILED,
@@ -1047,6 +1124,7 @@ class AgentRuntime:
                 status=RunStatus.FAILED,
                 sequence=handle.emitter.sequence,
             )
+            _emit_failed_model_call(handle, exc)
             handle.emitter.emit(
                 RunEventType.RUN_FAILED,
                 status=RunStatus.FAILED,
@@ -1277,6 +1355,63 @@ def _safe_event_value(value: Any, *, key: str = "") -> Any:
     if isinstance(value, str) and len(value) > 2_000:
         return value[:2_000] + "[truncated]"
     return value
+
+
+def _emit_failed_model_call(handle: _RunHandle, exc: Exception) -> None:
+    """Close a started model-call record without persisting provider error text."""
+    started = next(
+        (
+            event
+            for event in reversed(handle.emitter.events)
+            if event.type == RunEventType.MODEL_CALL_STARTED
+        ),
+        None,
+    )
+    if started is None:
+        return
+    if any(
+        event.type == RunEventType.MODEL_OUTPUT and event.sequence > started.sequence
+        for event in handle.emitter.events
+    ):
+        return
+    started_at = started.data.get("started_monotonic")
+    duration_ms = (
+        round((time.perf_counter() - float(started_at)) * 1000, 3)
+        if isinstance(started_at, int | float)
+        else None
+    )
+    context = {
+        key: value
+        for key, value in started.data.items()
+        if key != "started_monotonic"
+    }
+    handle.emitter.emit(
+        RunEventType.MODEL_OUTPUT,
+        status=RunStatus.FAILED,
+        node="call_model",
+        data={
+            "text": "",
+            "tool_calls": [],
+            "usage": TokenUsage().model_dump(mode="json"),
+            "provider": context.get("endpoint_id", str(handle.request.provider)),
+            "model": context.get("requested_model", handle.request.model),
+            "response_metadata": {},
+            "call": {
+                **context,
+                "returned_model": None,
+                "provider_request_id": None,
+                "usage": TokenUsage().model_dump(mode="json"),
+                "first_token_latency_ms": None,
+                "duration_ms": duration_ms,
+                "finish_reason": None,
+                "stop_reason": ModelStopReason.PROVIDER_ERROR.value,
+                "retry_count": 0,
+                "error": {"type": type(exc).__name__},
+                "tool_call_count": 0,
+                "estimated_cost_usd": None,
+            },
+        },
+    )
 
 
 def _tool_results_from_state(state: dict[str, Any]) -> list[ToolResult]:

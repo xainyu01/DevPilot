@@ -127,6 +127,7 @@ def test_default_registry_declares_risk_classes(tmp_path: Path) -> None:
     assert definitions["file.read"].risk == ToolRisk.READ_ONLY
     assert definitions["file.patch"].risk == ToolRisk.RECOVERABLE_WRITE
     assert definitions["shell.exec"].risk == ToolRisk.HIGH_RISK
+    assert "command" not in definitions["test.run"].input_schema["properties"]
 
 
 @pytest.mark.asyncio

@@ -380,7 +380,8 @@ class FileWriteTool(Tool):
     definition = ToolDefinition(
         name="file.write",
         description=(
-            "Create or explicitly overwrite one UTF-8 project file with optional hash guard."
+            "Create or explicitly overwrite one UTF-8 project file. Set expected_sha256 only "
+            "when an exact hash came from a prior Tool Result; otherwise omit it."
         ),
         input_schema={
             "type": "object",
@@ -755,6 +756,12 @@ class TestRunTool(Tool):
     ) -> None:
         self.root = root.resolve()
         self.allowed_commands = allowed_commands or []
+        if not self.allowed_commands:
+            # The model may select a server-discovered kind, but it must not
+            # repurpose the test tool as an arbitrary command runner. Explicit
+            # commands are exposed only when an administrator configured them.
+            self.definition = self.definition.model_copy(deep=True)
+            self.definition.input_schema["properties"].pop("command", None)
 
     definition = ToolDefinition(
         name="test.run",
@@ -762,8 +769,18 @@ class TestRunTool(Tool):
         input_schema={
             "type": "object",
             "properties": {
-                "kind": {"type": "string"},
-                "command": {"type": "array", "items": {"type": "string"}},
+                "kind": {
+                    "type": "string",
+                    "description": "Discovered command kind such as test; prefer this field.",
+                },
+                "command": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Exact test command previously returned by repo.scan or configured "
+                        "by an administrator; never use this for arbitrary CLI diagnostics."
+                    ),
+                },
                 "timeout_seconds": {"type": "number", "exclusiveMinimum": 0, "maximum": 300},
             },
             "additionalProperties": False,

@@ -1,15 +1,15 @@
 {
-  "overall_percent": 96,
-  "current_batch": "B8-R7",
-  "next_action": "执行 R7 Usage 可观测性、真实 FastAPI/WebSocket DeepSeek 空目录 Event Lens 验收和发布纠偏。",
-  "updated_at": "2026-07-31T06:00:00+08:00",
+  "overall_percent": 98,
+  "current_batch": "B8",
+  "next_action": "在具备 Docker 的环境执行 Compose 配置、容器启动以及 healthz/readyz 发布验收。",
+  "updated_at": "2026-07-31T03:37:00+08:00",
   "constraints": [
     "普通文档放在 docs/",
     "Python 依赖只由 uv 管理并提交 uv.lock",
     "按计划书分批实施；每批可暂停、可验证、可交接",
     "高风险外部操作必须经策略、审批和审计",
     "B7 固定用户 admin、admin1、admin2、admin3 在最终公开上线前保留，并通过 users、RBAC 和 JWT 正常链路授权",
-    "用户已确认进入 B8-R1 真实 Agent 纠偏阶段；下一对话按 R1～R7 连续执行，每个子批次验收后自动创建本地 Git 提交并继续，不自动 push"
+    "B8-R1～R7 已连续完成并分别创建本地 Git 提交；默认不自动 push"
   ],
   "batches": [
     {
@@ -104,7 +104,7 @@
       "id": "B8",
       "title": "阶段 8：稳定化与发布",
       "status": "进行中",
-      "percent": 92,
+      "percent": 96,
       "scope": ["安全加固", "恢复", "迁移", "备份", "真实 Agent 闭环", "Docker 发布"],
       "completed": [
         "固定 B7 用户写入 users 表，并改用可跨重启验证的 HS256 JWT",
@@ -120,15 +120,14 @@
         "完成项目级文件创建/写入/删除/Diff/状态/扫描/测试工具、hash 保护、Shell 路径校验和 Windows Job Object 进程树终止；DeepSeek 真实写工具冒烟成功",
         "完成统一 ContextAssembler/RunCoordinator，恢复完整会话并组装项目规则、仓库画像、工作区变化与用户/项目记忆",
         "完成持久 Run/Event/Checkpoint/Approval/Audit、后台与控制 API、重启审批恢复和 Web 运行时间线",
-        "完成服务器端 CompletionVerifier、结构化证据验收、partial 终态和最多两轮自动纠错"
+        "完成服务器端 CompletionVerifier、结构化证据验收、partial 终态和最多两轮自动纠错",
+        "完成逐次模型调用、工具调用、延迟、供应商请求 ID、缓存 Token 与 Run/Session Usage 可观测性",
+        "DeepSeek 通过真实 FastAPI/WebSocket 自主完成空目录 Event Lens 创建、测试、同 Session 增量修改和 Anthropic 协议复核"
       ],
       "in_progress": [
-        "完成真实 DeepSeek 空目录 Event Lens 编程与增量修改验收",
         "在 Docker 可用的环境执行 Compose 配置和容器启动健康检查"
       ],
       "next_steps": [
-        "执行 docs/REAL_AGENT_IMPLEMENTATION_PLAN.md 的 R7",
-        "使用 DeepSeek 通过真实 FastAPI/WebSocket 在空目录自主创建 Event Lens 项目并运行测试",
         "运行 docker compose config",
         "运行 docker compose up --build -d 并验证 /healthz 与 /readyz"
       ],
@@ -244,16 +243,20 @@
     {
       "id": "B8-R7",
       "title": "B8 纠偏 R7：可观测性、真实 E2E 与发布纠偏",
-      "status": "进行中",
-      "percent": 0,
+      "status": "已完成",
+      "percent": 100,
       "scope": ["模型调用可观测性", "Run/Session Usage", "DeepSeek Event Lens E2E", "增量修改", "发布门槛"],
-      "completed": [],
-      "in_progress": ["持久化逐次模型调用和工具统计并准备真实 DeepSeek 空目录验收"],
-      "next_steps": [
-        "通过真实 FastAPI/WebSocket 让 DeepSeek 自主创建并测试 Event Lens",
-        "在同一 Session 完成增量修改并以 Anthropic 协议执行只读冒烟",
-        "执行全量回归、安全扫描和最终文档验收"
+      "completed": [
+        "模型每次调用持久化请求模型、实际模型、协议、选择器、首 Token/总延迟、输入/输出/缓存 Token、工具调用数、错误类型和供应商请求 ID",
+        "Run 查询返回逐次 model_calls 与汇总 metrics，Session Usage API 聚合多个 Run 且未知价格保持 null",
+        "capability_limit 只能缩小 RBAC 能力；未配置允许命令时 test.run 不向模型暴露任意 command 参数",
+        "DeepSeek 通过真实 FastAPI/WebSocket 在空目录自主创建 Event Lens，首轮 15 项测试、同 Session 增量后 25 项测试全部通过",
+        "deepseek-anthropic 协议在同一项目完成独立 file.read Tool Call 复核，三个 Run 均进入 completed 并保存完整证据",
+        "空目录验收驱动只负责会话和验收，不向目标项目写源码；所有目标文件均来自 DeepSeek Tool Calling",
+        "最终 153 项全量测试、Ruff、doctor 与 Vite production build 通过；领域覆盖率 85.81%，Tool Call 解析 99%、路径/策略 94%、审批 94%、凭据 92%、恢复运行时 90%"
       ],
+      "in_progress": [],
+      "next_steps": [],
       "blockers": []
     }
   ]

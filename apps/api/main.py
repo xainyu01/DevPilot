@@ -179,6 +179,7 @@ class RunCreateRequest(BaseModel):
     provider: str | None = None
     model: str | None = None
     allowed_models: list["ModelTargetRequest"] = Field(default_factory=list)
+    capability_limit: list[str] = Field(default_factory=list, max_length=50)
     run_id: str | None = None
     acceptance_criteria: list[str] = Field(default_factory=list, max_length=50)
     context_max_tokens: int = Field(default=64_000, ge=1_000, le=128_000)
@@ -985,6 +986,7 @@ def create_app(
             )
         except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        _persist_workspace_changes(app, request.run_id, runtime)
         return result.model_dump(mode="json")
 
     @app.get("/api/v1/runs/{run_id}/changes", tags=["runs"])
@@ -1007,6 +1009,22 @@ def create_app(
             "model": record["model"],
             "provider_request_id": record["provider_request_id"],
             "usage": record["usage"],
+            "model_calls": record["model_calls"],
+            "metrics": record["metrics"],
+        }
+
+    @app.get("/api/v1/sessions/{session_id}/usage", tags=["sessions"])
+    def get_session_usage(
+        session_id: str,
+        actor_id: str = Depends(_authenticated_actor),
+    ) -> dict[str, object]:
+        session = SessionRepository(_database(app)).get(session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="session not found")
+        _require_session_access(app, session, actor_id, SessionPermission.VIEW)
+        return {
+            "session_id": session_id,
+            **RunRepository(_database(app)).session_usage(session.thread_id),
         }
 
     @app.websocket("/api/v1/sessions/{session_id}/events")
@@ -1041,6 +1059,11 @@ def create_app(
                             final_text = event.data.get("text")
                 finally:
                     app.state.active_run_count -= 1
+                _persist_workspace_changes(
+                    app,
+                    prepared.request.run_id,
+                    prepared.runtime,
+                )
                 if final_text:
                     SessionRepository(_database(app)).append_message(
                         session_id, ChatMessage.from_text("assistant", str(final_text))
@@ -1665,6 +1688,8 @@ async def _prepare_session_run(
         actor_id,
         run_id=run_id,
     )
+    if payload.capability_limit:
+        capabilities &= set(payload.capability_limit)
     project = None
     rules = []
     profile = None
@@ -1705,10 +1730,24 @@ async def _prepare_session_run(
             for definition in runtime.tool_runtime.registry.definitions()
             if set(definition.required_capabilities).issubset(capabilities)
         ]
+    selected_endpoint = app.state.local_settings.endpoint(selection.target.endpoint_id)
+    selector_call = (
+        {
+            **selection.selector_call,
+            "protocol": app.state.local_settings.endpoint(
+                selection.selector.endpoint_id
+            ).provider,
+        }
+        if selection.selector_call is not None and selection.selector is not None
+        else None
+    )
     selection_metadata = {
         "mode": selection.mode,
         "reason": selection.reason,
         "fallback_used": selection.fallback_used,
+        "protocol": selected_endpoint.provider,
+        "selector_usage": selection.selector_usage.model_dump(mode="json"),
+        "selector_call": selector_call,
         "selector": (
             {
                 "endpoint_id": selection.selector.endpoint_id,
@@ -1768,15 +1807,7 @@ async def _execute_prepared_run(
         SessionRepository(_database(app)).append_message(
             session.id, ChatMessage.from_text("assistant", result.final_text)
         )
-    changes: list[dict[str, object]] = []
-    if prepared.runtime.tool_runtime is not None:
-        status = prepared.runtime.tool_runtime.workspace_status()
-        for kind in ("added", "modified", "deleted"):
-            changes.extend({"kind": kind, "path": path} for path in status[kind])
-        diff = prepared.runtime.tool_runtime.workspace_diff()
-        if diff:
-            changes.append({"kind": "diff", "content": diff})
-    RunRepository(_database(app)).save_changes(prepared.request.run_id, changes)
+    _persist_workspace_changes(app, prepared.request.run_id, prepared.runtime)
     _record_runtime_log(
         app,
         event="session.run.completed",
@@ -1788,6 +1819,22 @@ async def _execute_prepared_run(
         },
     )
     return result
+
+
+def _persist_workspace_changes(
+    app: FastAPI,
+    run_id: str,
+    runtime: AgentRuntime,
+) -> None:
+    changes: list[dict[str, object]] = []
+    if runtime.tool_runtime is not None:
+        status = runtime.tool_runtime.workspace_status()
+        for kind in ("added", "modified", "deleted"):
+            changes.extend({"kind": kind, "path": path} for path in status[kind])
+        diff = runtime.tool_runtime.workspace_diff()
+        if diff:
+            changes.append({"kind": "diff", "content": diff})
+    RunRepository(_database(app)).save_changes(run_id, changes)
 
 
 def _require_run_access(

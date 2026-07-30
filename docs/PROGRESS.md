@@ -1,7 +1,7 @@
 # DevPilot 实施进度
 
 > 最后更新：2026-07-31（Asia/Shanghai）
-> 当前批次：B8-R7（可观测性、真实 E2E 与发布纠偏）
+> 当前批次：B8（仅余 Docker 发布环境验收）
 
 进度事实源为 [`progress.json`](progress.json)。
 
@@ -15,24 +15,20 @@
 | B5 | 已完成 | 100% | CLI、React/Vite 工作台与会话事件 |
 | B6 | 已完成 | 100% | Windows-first 本地 Web 与平台端口 |
 | B7 | 已完成 | 100% | 用户、团队、RBAC、共享与远程 Host |
-| B8 | 进行中 | 92% | 稳定化、安全、真实 Agent 闭环、恢复、部署与发布 |
+| B8 | 进行中 | 96% | 稳定化、安全、真实 Agent 闭环、恢复、部署与发布 |
 | B8-R1 | 已完成 | 100% | ModelToolCall 契约、OpenAI/Anthropic 工具协议与 DeepSeek 真实冒烟 |
 | B8-R2 | 已完成 | 100% | LangGraph 自主工具循环、预算、重复检测与审批恢复 |
 | B8-R3 | 已完成 | 100% | 项目级编程工具、路径/进程安全与专用测试 |
 | B8-R4 | 已完成 | 100% | ContextAssembler、会话/规则/仓库/记忆与统一协调器 |
 | B8-R5 | 已完成 | 100% | Run/Event/Checkpoint 持久化、审批恢复、控制 API 与 Web 工作台 |
 | B8-R6 | 已完成 | 100% | CompletionVerifier、证据验收、partial 终态与自动纠错 |
-| B8-R7 | 进行中 | 0% | 模型调用可观测性、DeepSeek Event Lens E2E 与发布纠偏 |
+| B8-R7 | 已完成 | 100% | 模型调用可观测性、DeepSeek Event Lens E2E 与发布纠偏 |
 
-## 下一阶段已确认
+## 真实 Agent 纠偏结论
 
-用户已确认进入 B8-R1 真实 Agent 纠偏阶段。下一对话必须按照
-[完整改造计划](REAL_AGENT_IMPLEMENTATION_PLAN.md) 从 R1 连续执行到 R7：
-
-- 每个 R 子批次完成代码、测试、文档和验收后自动创建本地 Git 提交；
-- 每次提交后立即继续下一子批次，不等待用户逐批确认；
-- 最终必须完成 DeepSeek 自主 Tool Calling、空目录写项目和真实测试 E2E；
-- 默认不执行 `git push`，远程推送仍需用户明确授权。
+[完整改造计划](REAL_AGENT_IMPLEMENTATION_PLAN.md) 的 R1～R7 已连续完成。每个子批次均包含实现、
+测试、文档和独立本地 Git 提交；真实 DeepSeek 已通过原生 Tool Calling 在空目录建立并测试项目，
+不是由 DevPilot 或 Codex 向验收目录代写源码。默认不执行 `git push`，远程推送仍需用户明确授权。
 
 ## B8 已完成
 
@@ -90,16 +86,37 @@ R6 已新增独立 `CompletionVerifier`：空目录、缺失文件、未恢复 T
 `failed`；终态和 verification 会持久化，并由 REST、WebSocket 与 Web 时间线一致展示。确定性测试
 覆盖伪完成拒绝、首轮测试失败后修复通过、重复失败终止及 API 持久证据，完整回归为 `119 passed`。
 
+R7 已补齐逐次模型调用可观测性：每个调用均保存请求/实际模型、协议、选择器、首 Token 和总延迟、
+输入/输出/缓存 Token、工具调用数、错误类型和供应商请求 ID；Run 返回逐次调用与汇总指标，
+Session Usage 跨 Run 聚合，未配置价格时成本保持 `null`。调用方提供的 `capability_limit` 只能收窄
+RBAC 能力，默认 `test.run` Schema 不再向模型暴露管理员未允许的任意命令入口。
+
+真实验收使用本地 DeepSeek 配置和真实 FastAPI/WebSocket 运行，验收驱动没有向目标目录写源码：
+
+- 创建 Run `event-lens-create-2b033f7561534992a584423c217c91d1` 由模型依次调用
+  `file.list`、`repo.scan`、`file.mkdir`、`file.write`、`test.run`、`file.read`，自主创建
+  `README.md`、`event_lens.py`、`examples/events.jsonl` 和 `tests/test_event_lens.py`，
+  15 项测试通过；
+- 同一 Session 的增量 Run `event-lens-increment-2b033f7561534992a584423c217c91d1`
+  读取原文件后通过 `file.write` 修改并再次执行 `test.run`，25 项测试通过；
+- Run `event-lens-anthropic-2b033f7561534992a584423c217c91d1` 使用
+  `deepseek-anthropic` 协议独立产生 `file.read` Tool Call 并完成复核；
+- 三个 Run 全部进入 `completed`。Session 汇总 Usage 为输入 201652、输出 10550、
+  缓存读取 158464、总计 212202 Token，逐次模型与工具证据均已持久化。
+
+最终自动门禁为 `153 passed`、Ruff、`devpilot doctor` 和 Vite production build 全部通过。
+领域相关模块总覆盖率为 85.81%；纯 Tool Call 解析模块 99%、路径/策略 94%、审批 94%、
+凭据设置 92%、恢复运行时 90%、CompletionVerifier 97%，满足计划中的覆盖率门槛。
+
 - 问题分析：[REAL_AGENT_GAP_ANALYSIS.md](REAL_AGENT_GAP_ANALYSIS.md)
 - 完整纠偏计划：[REAL_AGENT_IMPLEMENTATION_PLAN.md](REAL_AGENT_IMPLEMENTATION_PLAN.md)
 
-下一步必须连续完成计划中的 R7，并以 DeepSeek 自主产生 Tool Call、创建 Event Lens 文件、
-执行测试和形成持久化证据作为发布门槛。不得由 DevPilot/Codex 手工代写验收项目代码。
+R1～R7 的发布门槛已经满足；B8 目前只剩 Docker 环境中的容器发布验收。
 
 ## 其他待完成的发布验收
 
 当前工作站未安装 Docker、`docker-compose` 或 Podman，因而未能运行容器配置解析和启动验收。
-在真实 Agent 纠偏完成后，B8 仍不可标记为全部完成，直到在 Docker 可用环境执行：
+B8 仍不可标记为全部完成，直到在 Docker 可用环境执行：
 
 ```powershell
 docker compose config
