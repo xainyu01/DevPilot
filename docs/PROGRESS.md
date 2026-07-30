@@ -1,7 +1,7 @@
 # DevPilot 实施进度
 
 > 最后更新：2026-07-31（Asia/Shanghai）
-> 当前批次：B8，95%（容器运行验收待执行）
+> 当前批次：B8，70%（真实 Agent 闭环纠偏与容器验收待完成）
 
 进度事实源为 [`progress.json`](progress.json)。
 
@@ -15,7 +15,7 @@
 | B5 | 已完成 | 100% | CLI、React/Vite 工作台与会话事件 |
 | B6 | 已完成 | 100% | Windows-first 本地 Web 与平台端口 |
 | B7 | 已完成 | 100% | 用户、团队、RBAC、共享与远程 Host |
-| B8 | 进行中 | 95% | 稳定化、安全、恢复、部署与发布 |
+| B8 | 进行中 | 70% | 稳定化、安全、真实 Agent 闭环、恢复、部署与发布 |
 
 ## B8 已完成
 
@@ -31,9 +31,26 @@
   使用临时 DeepSeek Key 对
   Anthropic/OpenAI 兼容协议及自动选模完成最小真实验证，凭据仅在本地忽略配置中。
 
-## 待完成的发布验收
+## 真实 Agent 端到端纠偏
 
-当前工作站未安装 Docker、`docker-compose` 或 Podman，因而未能运行容器配置解析和启动验收。这是 B8 唯一未完成的外部环境检查；批次不可标记为完成或创建 B8 完成提交，直到在 Docker 可用环境执行：
+2026-07-31 使用 `deepseek-openai / deepseek-v4-flash` 通过真实 FastAPI 会话测试空目录建项目。
+模型调用成功并返回完整代码文本，但 Run 被错误标记为 `completed`，实际 Tool 事件、文件变化和
+测试执行均为 0。
+
+代码审计确认：原生 `file.read`、`file.search`、`file.patch`、`shell.exec`、`git.exec`
+及策略/审批基础已经存在，但模型适配器未绑定工具，Agent Graph 没有模型驱动的 Tool Calling
+循环，API 也没有为项目创建 ToolRuntime。当前产品因此尚不能作为真实编程 Agent 发布。
+
+- 问题分析：[REAL_AGENT_GAP_ANALYSIS.md](REAL_AGENT_GAP_ANALYSIS.md)
+- 完整纠偏计划：[REAL_AGENT_IMPLEMENTATION_PLAN.md](REAL_AGENT_IMPLEMENTATION_PLAN.md)
+
+下一步必须连续完成计划中的 R1～R7，并以 DeepSeek 自主产生 Tool Call、创建 Event Lens 文件、
+执行测试和形成持久化证据作为发布门槛。不得由 DevPilot/Codex 手工代写验收项目代码。
+
+## 其他待完成的发布验收
+
+当前工作站未安装 Docker、`docker-compose` 或 Podman，因而未能运行容器配置解析和启动验收。
+在真实 Agent 纠偏完成后，B8 仍不可标记为全部完成，直到在 Docker 可用环境执行：
 
 ```powershell
 docker compose config

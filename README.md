@@ -60,6 +60,8 @@ API Key 明文，因此该目录应只允许当前系统用户访问，且不得
 ## 文档
 
 - [进度](docs/PROGRESS.md)
+- [真实 Agent 缺口分析](docs/REAL_AGENT_GAP_ANALYSIS.md)
+- [真实编程 Agent 完整改造计划](docs/REAL_AGENT_IMPLEMENTATION_PLAN.md)
 - [首次运行](docs/GETTING_STARTED.md)
 - [发布指南](docs/RELEASE.md)
 - [命名迁移](docs/BRANDING_MIGRATION.md)

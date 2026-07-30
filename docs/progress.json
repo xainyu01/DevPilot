@@ -1,8 +1,8 @@
 {
-  "overall_percent": 99,
+  "overall_percent": 90,
   "current_batch": "B8",
-  "next_action": "在具备 Docker 的部署环境运行 docker compose config 和容器健康检查，然后完成 B8 发布验收。",
-  "updated_at": "2026-07-31T00:00:00+08:00",
+  "next_action": "按 docs/REAL_AGENT_IMPLEMENTATION_PLAN.md 从 R1 到 R7 补齐模型原生 Tool Calling、Agent 循环、项目级工具、上下文、持久化、验证和真实 DeepSeek E2E。",
+  "updated_at": "2026-07-31T01:18:34+08:00",
   "constraints": [
     "普通文档放在 docs/",
     "Python 依赖只由 uv 管理并提交 uv.lock",
@@ -103,8 +103,8 @@
       "id": "B8",
       "title": "阶段 8：稳定化与发布",
       "status": "进行中",
-      "percent": 95,
-      "scope": ["安全加固", "恢复", "迁移", "备份", "Docker 发布"],
+      "percent": 70,
+      "scope": ["安全加固", "恢复", "迁移", "备份", "真实 Agent 闭环", "Docker 发布"],
       "completed": [
         "固定 B7 用户写入 users 表，并改用可跨重启验证的 HS256 JWT",
         "补齐项目、工作流、PR 和记忆的资源级 RBAC 校验",
@@ -115,9 +115,20 @@
         "完成多组模型连接、Coding Plan、环境变量回退、Web 配置和受限自动选模扩展",
         "通过 83 项测试、设置/凭据模块 90% 覆盖率、Ruff、Vite build 和 DeepSeek 双协议最小真实调用"
       ],
-      "in_progress": ["在 Docker 可用的环境执行 Compose 配置和容器启动健康检查"],
-      "next_steps": ["运行 docker compose config", "运行 docker compose up --build -d 并验证 /healthz 与 /readyz"],
-      "blockers": ["当前工作站未安装 Docker、docker-compose 或 Podman，无法执行容器发布验收"]
+      "in_progress": [
+        "修复真实 Agent 闭环：当前模型只能返回代码文本，不能自主产生 Tool Call、写文件或运行测试",
+        "在 Docker 可用的环境执行 Compose 配置和容器启动健康检查"
+      ],
+      "next_steps": [
+        "执行 docs/REAL_AGENT_IMPLEMENTATION_PLAN.md 的 R1～R7",
+        "使用 DeepSeek 通过真实 FastAPI/WebSocket 在空目录自主创建 Event Lens 项目并运行测试",
+        "运行 docker compose config",
+        "运行 docker compose up --build -d 并验证 /healthz 与 /readyz"
+      ],
+      "blockers": [
+        "真实 Agent E2E 已失败：Run 被标记 completed，但 Tool 事件、文件变化和测试执行均为 0",
+        "当前工作站未安装 Docker、docker-compose 或 Podman，无法执行容器发布验收"
+      ]
     }
   ]
 }
