@@ -66,6 +66,8 @@ class ToolRuntime:
 
     def workspace_status(self) -> dict[str, list[str]]:
         """Return changes relative to this runtime's protected baseline."""
+        if "workspace.status" not in self.registry.names():
+            return {"added": [], "modified": [], "deleted": []}
         tool = self.registry.get("workspace.status")
         tracker = getattr(tool, "tracker", None)
         if tracker is None:
@@ -74,6 +76,8 @@ class ToolRuntime:
 
     def workspace_diff(self) -> str:
         """Return a bounded textual diff relative to this runtime's baseline."""
+        if "file.diff" not in self.registry.names():
+            return ""
         tool = self.registry.get("file.diff")
         tracker = getattr(tool, "tracker", None)
         return tracker.diff() if tracker is not None else ""

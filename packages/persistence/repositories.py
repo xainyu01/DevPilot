@@ -731,6 +731,7 @@ class RunRepository:
                 terminal_types = {
                     RunEventType.RUN_PAUSED,
                     RunEventType.RUN_COMPLETED,
+                    RunEventType.RUN_PARTIAL,
                     RunEventType.RUN_CANCELLED,
                     RunEventType.RUN_FAILED,
                 }
@@ -781,6 +782,7 @@ class RunRepository:
             row.status = result.status.value
             row.result_json = _json_value(result)
             row.usage_json = _json_value(result.usage)
+            row.verification_json = _json_value(result.verification)
             row.stop_reason = result.stop_reason
             row.pending_approval_json = (
                 _json_value(result.pending_approval) if result.pending_approval else None

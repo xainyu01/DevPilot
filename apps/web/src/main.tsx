@@ -287,6 +287,7 @@ function RunEventCard({
     "run.paused": "Run paused",
     "run.resumed": "Run resumed",
     "run.completed": "Run completed",
+    "run.partial": "Run partial",
     "run.failed": "Run failed",
     "run.cancelled": "Run cancelled",
   };
@@ -427,7 +428,7 @@ function App() {
       const eventData = JSON.parse(item.data) as RunEvent & { detail?: string };
       if (eventData.type === "error") setError(eventData.detail || "Run failed");
       if (eventData.event_id) setRunEvents((items) => items.some((entry) => entry.event_id === eventData.event_id) ? items : [...items, eventData]);
-      if (["run.completed", "run.failed", "run.cancelled", "run.paused", "error"].includes(eventData.type)) {
+      if (["run.completed", "run.partial", "run.failed", "run.cancelled", "run.paused", "error"].includes(eventData.type)) {
         setIsSending(false);
         socket.close();
         void api<Snapshot>(`/api/v1/sessions/${activeSession.id}`).then(setSnapshot);

@@ -42,6 +42,7 @@ from packages.model_gateway.errors import (
 from packages.tool_runtime import ToolRuntime
 
 from .checkpoints import CheckpointStore
+from .verifier import CompletionVerifier
 
 EventSubscriber = Callable[[RunEvent], None]
 
@@ -127,6 +128,8 @@ def _route_after_node(state: AgentState) -> str:
         return "cancelled"
     if status == RunStatus.FAILED:
         return "failed"
+    if status == RunStatus.PARTIAL:
+        return "partial"
     return "continue"
 
 
@@ -159,6 +162,7 @@ def build_agent_graph(
     emitter: _EventEmitter | None = None,
     checkpointer: Any | None = None,
     tool_runtime: ToolRuntime | None = None,
+    completion_verifier: CompletionVerifier | None = None,
 ) -> Any:
     """Build and compile the Agent graph with optional B2 tool execution.
 
@@ -167,6 +171,7 @@ def build_agent_graph(
     """
 
     run_control = control or _RunControl()
+    verifier = completion_verifier or CompletionVerifier()
 
     def emit(
         event_type: RunEventType,
@@ -515,41 +520,72 @@ def build_agent_graph(
         async def operation(current: AgentState) -> dict[str, Any]:
             response = current.get("response")
             text = response.text.strip() if isinstance(response, ChatResponse) else ""
-            if text:
+            report = verifier.verify(
+                task_text=_task_text(current.get("messages", [])),
+                final_text=text,
+                acceptance_criteria=list(current.get("acceptance_criteria", [])),
+                tool_results=[
+                    ToolResult.model_validate(result)
+                    for result in current.get("tool_results", [])
+                ],
+                tool_runtime=tool_runtime,
+            )
+            attempts = int(current.get("verification_attempts", 0))
+            fingerprints = list(current.get("verification_fingerprints", []))
+            if report.satisfied:
                 return {
-                    "verification": {
-                        "satisfied": True,
-                        "reason": "model returned a final response without pending tool calls",
-                    },
+                    "verification": report.model_dump(mode="json"),
+                    "verification_attempts": attempts,
+                    "verification_fingerprints": fingerprints,
                     "status": RunStatus.RUNNING,
                 }
-            no_progress = int(current.get("consecutive_no_progress", 0)) + 1
-            if no_progress >= 3:
+            attempts += 1
+            repeated = bool(fingerprints and fingerprints[-1] == report.fingerprint)
+            fingerprints.append(report.fingerprint)
+            has_evidence = bool(
+                report.evidence.get("successful_tools")
+                or any(report.evidence.get("workspace", {}).values())
+            )
+            if repeated or attempts >= 3:
+                outcome = "partial" if has_evidence else "failed"
+                final_report = report.model_copy(update={"outcome": outcome})
                 return {
-                    "verification": {
-                        "satisfied": False,
-                        "reason": "model returned no final text",
-                    },
-                    "consecutive_no_progress": no_progress,
-                    "status": RunStatus.FAILED,
-                    "stop_reason": "consecutive_no_progress",
+                    "verification": final_report.model_dump(mode="json"),
+                    "verification_attempts": attempts,
+                    "verification_fingerprints": fingerprints,
+                    "status": (
+                        RunStatus.PARTIAL if outcome == "partial" else RunStatus.FAILED
+                    ),
+                    "stop_reason": (
+                        "verification_repeated_without_progress"
+                        if repeated
+                        else "verification_retry_limit"
+                    ),
                     "error": {
-                        "code": "agent_no_progress",
-                        "message": "model returned no text or tool calls three times",
+                        "code": "verification_failed",
+                        "message": "; ".join(report.issues),
                     },
                 }
             feedback = ChatMessage.from_text(
                 "system",
-                "No usable final response or tool call was produced. Continue the task or "
-                "return a concise final answer.",
+                "Server-side completion verification rejected the current result. "
+                "Do not merely claim success. Use tools to address every issue, then run "
+                "the required tests and report evidence.\n"
+                + json.dumps(
+                    {
+                        "verification_attempt": attempts,
+                        "issues": report.issues,
+                        "evidence": report.evidence,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
             )
             return {
-                "verification": {
-                    "satisfied": False,
-                    "reason": "model returned no final text",
-                },
+                "verification": report.model_dump(mode="json"),
+                "verification_attempts": attempts,
+                "verification_fingerprints": fingerprints,
                 "messages": [*current.get("messages", []), feedback],
-                "consecutive_no_progress": no_progress,
                 "status": RunStatus.RUNNING,
             }
 
@@ -583,6 +619,14 @@ def build_agent_graph(
     async def failed(state: AgentState) -> dict[str, Any]:
         return {"status": RunStatus.FAILED, "final_text": None}
 
+    async def partial(state: AgentState) -> dict[str, Any]:
+        issues = state.get("verification", {}).get("issues", [])
+        return {
+            "status": RunStatus.PARTIAL,
+            "final_text": "Task produced partial results but did not pass server verification: "
+            + "; ".join(str(issue) for issue in issues),
+        }
+
     graph = StateGraph(AgentState)
     graph.add_node("load_context", load_context)
     graph.add_node("normalize_input", normalize_input)
@@ -593,16 +637,27 @@ def build_agent_graph(
     graph.add_node("finalize", finalize)
     graph.add_node("cancelled", cancelled)
     graph.add_node("failed", failed)
+    graph.add_node("partial", partial)
     graph.add_edge(START, "load_context")
     graph.add_conditional_edges(
         "load_context",
         _route_after_node,
-        {"continue": "normalize_input", "cancelled": "cancelled", "failed": "failed"},
+        {
+            "continue": "normalize_input",
+            "cancelled": "cancelled",
+            "failed": "failed",
+            "partial": "partial",
+        },
     )
     graph.add_conditional_edges(
         "normalize_input",
         _route_after_node,
-        {"continue": "plan", "cancelled": "cancelled", "failed": "failed"},
+        {
+            "continue": "plan",
+            "cancelled": "cancelled",
+            "failed": "failed",
+            "partial": "partial",
+        },
     )
     graph.add_conditional_edges(
         "plan",
@@ -612,12 +667,18 @@ def build_agent_graph(
             "tools": "execute_tools",
             "cancelled": "cancelled",
             "failed": "failed",
+            "partial": "partial",
         },
     )
     graph.add_conditional_edges(
         "execute_tools",
         _route_after_node,
-        {"continue": "call_model", "cancelled": "cancelled", "failed": "failed"},
+        {
+            "continue": "call_model",
+            "cancelled": "cancelled",
+            "failed": "failed",
+            "partial": "partial",
+        },
     )
     graph.add_conditional_edges(
         "call_model",
@@ -627,6 +688,7 @@ def build_agent_graph(
             "verify": "verify",
             "cancelled": "cancelled",
             "failed": "failed",
+            "partial": "partial",
         },
     )
     graph.add_conditional_edges(
@@ -637,11 +699,13 @@ def build_agent_graph(
             "model": "call_model",
             "cancelled": "cancelled",
             "failed": "failed",
+            "partial": "partial",
         },
     )
     graph.add_edge("finalize", END)
     graph.add_edge("cancelled", END)
     graph.add_edge("failed", END)
+    graph.add_edge("partial", END)
     return graph.compile(checkpointer=checkpointer or InMemorySaver())
 
 
@@ -670,6 +734,17 @@ def _request_from_state(
     )
 
 
+def _task_text(messages: list[ChatMessage]) -> str:
+    return next(
+        (
+            message.text_content()
+            for message in reversed(messages)
+            if message.role == "user"
+        ),
+        "",
+    )
+
+
 def _add_usage(first: TokenUsage, second: TokenUsage) -> TokenUsage:
     return TokenUsage(
         input_tokens=first.input_tokens + second.input_tokens,
@@ -689,12 +764,14 @@ class AgentRuntime:
         graph_checkpointer: Any | None = None,
         tool_runtime: ToolRuntime | None = None,
         run_repository: Any | None = None,
+        completion_verifier: CompletionVerifier | None = None,
     ) -> None:
         self.gateway = gateway
         self.checkpoint_store = checkpoint_store or CheckpointStore()
         self.graph_checkpointer = graph_checkpointer or InMemorySaver()
         self.tool_runtime = tool_runtime
         self.run_repository = run_repository
+        self.completion_verifier = completion_verifier or CompletionVerifier()
         self._handles: dict[tuple[str, str], _RunHandle] = {}
 
     def _new_handle(self, request: RunRequest) -> _RunHandle:
@@ -743,6 +820,8 @@ class AgentRuntime:
             "workspace_snapshot": {},
             "acceptance_criteria": request.acceptance_criteria,
             "verification": {},
+            "verification_attempts": 0,
+            "verification_fingerprints": [],
             "token_usage": TokenUsage(),
             "usage": TokenUsage(),
             "stop_reason": None,
@@ -785,6 +864,7 @@ class AgentRuntime:
             emitter=handle.emitter,
             checkpointer=self.graph_checkpointer,
             tool_runtime=self.tool_runtime,
+            completion_verifier=self.completion_verifier,
         )
         config = self._config(handle.request.thread_id, handle.request.run_id)
         input_value: AgentState | Command
@@ -833,6 +913,7 @@ class AgentRuntime:
                     tool_results=_tool_results_from_state(state),
                     usage=TokenUsage.model_validate(state.get("token_usage", {})),
                     stop_reason=state.get("stop_reason"),
+                    verification=state.get("verification", {}),
                 )
             else:
                 status = RunStatus(state.get("status", RunStatus.FAILED))
@@ -853,6 +934,29 @@ class AgentRuntime:
                         tool_results=_tool_results_from_state(state),
                         usage=TokenUsage.model_validate(state.get("token_usage", {})),
                         stop_reason=state.get("stop_reason"),
+                        verification=state.get("verification", {}),
+                    )
+                elif status == RunStatus.PARTIAL:
+                    handle.status = status
+                    checkpoint = await self._save_graph_checkpoint(handle, graph, status, state)
+                    handle.emitter.emit(
+                        RunEventType.RUN_PARTIAL,
+                        status=status,
+                        data={
+                            "text": state.get("final_text"),
+                            "verification": state.get("verification", {}),
+                        },
+                    )
+                    output = RunResult(
+                        context=handle.context,
+                        status=status,
+                        final_text=state.get("final_text"),
+                        events=list(handle.emitter.events),
+                        checkpoint=checkpoint,
+                        tool_results=_tool_results_from_state(state),
+                        usage=TokenUsage.model_validate(state.get("token_usage", {})),
+                        stop_reason=state.get("stop_reason"),
+                        verification=state.get("verification", {}),
                     )
                 elif status == RunStatus.CANCELLED:
                     handle.status = status
@@ -866,6 +970,7 @@ class AgentRuntime:
                         tool_results=_tool_results_from_state(state),
                         usage=TokenUsage.model_validate(state.get("token_usage", {})),
                         stop_reason=state.get("stop_reason"),
+                        verification=state.get("verification", {}),
                     )
                 else:
                     handle.status = RunStatus.FAILED
@@ -887,6 +992,7 @@ class AgentRuntime:
                         tool_results=_tool_results_from_state(state),
                         usage=TokenUsage.model_validate(state.get("token_usage", {})),
                         stop_reason=state.get("stop_reason"),
+                        verification=state.get("verification", {}),
                     )
         except asyncio.CancelledError:
             handle.status = RunStatus.CANCELLED
@@ -1021,6 +1127,7 @@ class AgentRuntime:
                     RunEventType.RUN_PAUSED,
                     RunEventType.RUN_CANCELLED,
                     RunEventType.RUN_COMPLETED,
+                    RunEventType.RUN_PARTIAL,
                     RunEventType.RUN_FAILED,
                 }:
                     break
@@ -1035,6 +1142,7 @@ class AgentRuntime:
         handle = self._handles.get((thread_id, run_id))
         if handle is None or handle.status in {
             RunStatus.COMPLETED,
+            RunStatus.PARTIAL,
             RunStatus.CANCELLED,
             RunStatus.FAILED,
         }:
@@ -1110,6 +1218,7 @@ class AgentRuntime:
         handle = self._handles.get((thread_id, run_id))
         if handle is None or handle.status in {
             RunStatus.COMPLETED,
+            RunStatus.PARTIAL,
             RunStatus.CANCELLED,
             RunStatus.FAILED,
         }:

@@ -1037,7 +1037,7 @@ def create_app(
                 try:
                     async for event in prepared.runtime.stream(prepared.request):
                         await websocket.send_json(event.model_dump(mode="json"))
-                        if event.type.value == "run.completed":
+                        if event.type.value in {"run.completed", "run.partial"}:
                             final_text = event.data.get("text")
                 finally:
                     app.state.active_run_count -= 1

@@ -1,7 +1,7 @@
 # DevPilot 实施进度
 
 > 最后更新：2026-07-31（Asia/Shanghai）
-> 当前批次：B8-R6（服务器端完成验证和纠错）
+> 当前批次：B8-R7（可观测性、真实 E2E 与发布纠偏）
 
 进度事实源为 [`progress.json`](progress.json)。
 
@@ -15,13 +15,14 @@
 | B5 | 已完成 | 100% | CLI、React/Vite 工作台与会话事件 |
 | B6 | 已完成 | 100% | Windows-first 本地 Web 与平台端口 |
 | B7 | 已完成 | 100% | 用户、团队、RBAC、共享与远程 Host |
-| B8 | 进行中 | 90% | 稳定化、安全、真实 Agent 闭环、恢复、部署与发布 |
+| B8 | 进行中 | 92% | 稳定化、安全、真实 Agent 闭环、恢复、部署与发布 |
 | B8-R1 | 已完成 | 100% | ModelToolCall 契约、OpenAI/Anthropic 工具协议与 DeepSeek 真实冒烟 |
 | B8-R2 | 已完成 | 100% | LangGraph 自主工具循环、预算、重复检测与审批恢复 |
 | B8-R3 | 已完成 | 100% | 项目级编程工具、路径/进程安全与专用测试 |
 | B8-R4 | 已完成 | 100% | ContextAssembler、会话/规则/仓库/记忆与统一协调器 |
 | B8-R5 | 已完成 | 100% | Run/Event/Checkpoint 持久化、审批恢复、控制 API 与 Web 工作台 |
-| B8-R6 | 进行中 | 0% | CompletionVerifier、证据验收与自动纠错 |
+| B8-R6 | 已完成 | 100% | CompletionVerifier、证据验收、partial 终态与自动纠错 |
+| B8-R7 | 进行中 | 0% | 模型调用可观测性、DeepSeek Event Lens E2E 与发布纠偏 |
 
 ## 下一阶段已确认
 
@@ -83,10 +84,16 @@ AgentRuntime；LangGraph 通道状态使用持久 SQLite checkpointer。后台 R
 同一 `run_id` 重连不重复执行工具；服务重启后等待审批仍可恢复。Web 工作台显示计划、实际模型、
 Tool Call/Result、审批和 Token 卡片，刷新后从持久事件 API 恢复。
 
+R6 已新增独立 `CompletionVerifier`：空目录、缺失文件、未恢复 Tool Error 以及用户要求测试但没有
+成功 `test.run` 的运行都不能完成。验证问题和证据会结构化回注模型，最多允许两个有进展修复回合，
+相同证据重复则提前停止。已有成果但仍未满足条件的运行使用 `partial/run.partial`，无成果则
+`failed`；终态和 verification 会持久化，并由 REST、WebSocket 与 Web 时间线一致展示。确定性测试
+覆盖伪完成拒绝、首轮测试失败后修复通过、重复失败终止及 API 持久证据，完整回归为 `119 passed`。
+
 - 问题分析：[REAL_AGENT_GAP_ANALYSIS.md](REAL_AGENT_GAP_ANALYSIS.md)
 - 完整纠偏计划：[REAL_AGENT_IMPLEMENTATION_PLAN.md](REAL_AGENT_IMPLEMENTATION_PLAN.md)
 
-下一步必须连续完成计划中的 R6～R7，并以 DeepSeek 自主产生 Tool Call、创建 Event Lens 文件、
+下一步必须连续完成计划中的 R7，并以 DeepSeek 自主产生 Tool Call、创建 Event Lens 文件、
 执行测试和形成持久化证据作为发布门槛。不得由 DevPilot/Codex 手工代写验收项目代码。
 
 ## 其他待完成的发布验收

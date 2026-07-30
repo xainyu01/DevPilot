@@ -251,6 +251,7 @@ class RunStatus(StrEnum):
     RUNNING = "running"
     PAUSED = "paused"
     COMPLETED = "completed"
+    PARTIAL = "partial"
     CANCELLED = "cancelled"
     FAILED = "failed"
 
@@ -270,6 +271,7 @@ class RunEventType(StrEnum):
     RUN_PAUSED = "run.paused"
     RUN_CANCELLED = "run.cancelled"
     RUN_COMPLETED = "run.completed"
+    RUN_PARTIAL = "run.partial"
     RUN_FAILED = "run.failed"
 
 
@@ -316,6 +318,8 @@ class AgentState(TypedDict, total=False):
     workspace_snapshot: dict[str, Any]
     acceptance_criteria: list[str]
     verification: dict[str, Any]
+    verification_attempts: int
+    verification_fingerprints: list[str]
     stop_reason: str | None
     status: RunStatus
     pause_reason: str | None
@@ -372,6 +376,7 @@ class RunResult(BaseModel):
     pending_approval: ApprovalRequest | None = None
     usage: TokenUsage = Field(default_factory=TokenUsage)
     stop_reason: str | None = None
+    verification: dict[str, Any] = Field(default_factory=dict)
 
 
 class RunEvent(BaseModel):

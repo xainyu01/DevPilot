@@ -374,6 +374,49 @@ def test_approval_api_resumes_high_risk_tool(
         assert "approval.decided" in [event["type"] for event in events]
 
 
+def test_server_rejects_false_completion_and_persists_verification(
+    tmp_path: Path,
+) -> None:
+    web_app = create_app(
+        database_url=f"sqlite:///{tmp_path / 'verification.db'}", workspace_root=tmp_path
+    )
+    project_root = tmp_path / "empty-verification-project"
+    project_root.mkdir()
+
+    with TestClient(web_app) as client:
+        authenticate(client)
+        project = client.post(
+            "/api/v1/projects",
+            json={"name": "verification", "root_path": str(project_root)},
+        ).json()
+        session = client.post(
+            "/api/v1/sessions",
+            json={"thread_id": "verification-thread", "project_id": project["id"]},
+        ).json()
+        result = client.post(
+            f"/api/v1/sessions/{session['id']}/runs",
+            json={
+                "run_id": "false-completion-run",
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "Create the tested program."}],
+                },
+                "acceptance_criteria": [
+                    "Create `required.py`.",
+                    "Run tests with test.run.",
+                ],
+            },
+        )
+        persisted = client.get("/api/v1/runs/false-completion-run")
+
+        assert result.status_code == 201
+        assert result.json()["status"] == "failed"
+        assert result.json()["stop_reason"] == "verification_repeated_without_progress"
+        assert result.json()["verification"]["satisfied"] is False
+        assert persisted.json()["verification"] == result.json()["verification"]
+        assert list(project_root.iterdir()) == []
+
+
 def test_project_registration_rejects_missing_or_file_path(tmp_path: Path) -> None:
     web_app = create_app(
         database_url=f"sqlite:///{tmp_path / 'paths.db'}", workspace_root=tmp_path
