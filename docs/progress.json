@@ -2,7 +2,7 @@
   "overall_percent": 99,
   "current_batch": "B8",
   "next_action": "在具备 Docker 的部署环境运行 docker compose config 和容器健康检查，然后完成 B8 发布验收。",
-  "updated_at": "2026-07-29T03:30:00+08:00",
+  "updated_at": "2026-07-31T00:00:00+08:00",
   "constraints": [
     "普通文档放在 docs/",
     "Python 依赖只由 uv 管理并提交 uv.lock",
@@ -111,7 +111,9 @@
         "持久化远程 Host 配对码摘要并使用带有效期的 Host JWT",
         "添加 readiness、登录限流、附件限制、SQLite WAL 和安全响应头",
         "添加 SQLite 备份命令、B8 Alembic 迁移、Dockerfile、Compose 和发布指南",
-        "通过完整 pytest、Ruff、doctor、Vite build 与迁移回归"
+        "通过完整 pytest、Ruff、doctor、Vite build 与迁移回归",
+        "完成多组模型连接、Coding Plan、环境变量回退、Web 配置和受限自动选模扩展",
+        "通过 83 项测试、设置/凭据模块 90% 覆盖率、Ruff、Vite build 和 DeepSeek 双协议最小真实调用"
       ],
       "in_progress": ["在 Docker 可用的环境执行 Compose 配置和容器启动健康检查"],
       "next_steps": ["运行 docker compose config", "运行 docker compose up --build -d 并验证 /healthz 与 /readyz"],

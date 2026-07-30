@@ -33,6 +33,30 @@ pnpm --dir apps/web build
 本地运行数据位于 `.devpilot/`，不应提交到仓库。完整的标识迁移说明见 [命名迁移](docs/BRANDING_MIGRATION.md)。
 本地的模型、用户和空闲自动关闭设置见 [本地运行设置](docs/LOCAL_SETTINGS.md)。
 
+## 模型 Settings 规则
+
+使用 `admin` 登录 Web 工作台，进入“设置 → 运行时”，可以维护多组模型连接。每组连接包含：
+
+- `id`：连接的唯一标识，只能使用小写字母、数字、点、短横线和下划线。
+- `name`：页面显示名称。
+- `provider`：接口协议，可选 `openai`、`anthropic`、`coding_plan`、`fake` 或 `ollama`。
+  `coding_plan` 使用 OpenAI-compatible Chat Completions 协议；仅提供 Anthropic Messages
+  地址的 Coding Plan 应选择 `anthropic`。
+- `base_url`：自定义 API 根地址；留空时读取环境变量。
+- `api_key`：API 密钥；Web 不会回显已经保存的值。留空表示保留原值或读取环境变量，
+  勾选“清除已保存 Key”才会删除本地值。
+- `models`：该连接允许使用的模型名称数组，同一连接可以填写多个。
+
+`default_model` 指定默认连接和模型。`agent_model_policy.mode` 为 `manual` 时使用默认模型，
+为 `auto` 时由默认模型先在 `allowed_models` 中建议目标模型，服务端校验建议没有越界后才执行；
+选模响应无效时会在允许范围内确定性回退。对话输入框也可以逐次选择“遵循全局策略”“自动选择”
+或一个明确模型。
+
+配置保存在已被 Git 忽略的 `.devpilot/settings.json`。当前版本会在这个本地文件中保存所填写的
+API Key 明文，因此该目录应只允许当前系统用户访问，且不得复制到提交、日志或共享文件中；
+更推荐把 `api_key` 留空并使用环境变量。字段的完整 JSON 格式、变量优先级和示例见
+[本地运行设置](docs/LOCAL_SETTINGS.md)。
+
 ## 文档
 
 - [进度](docs/PROGRESS.md)

@@ -9,6 +9,7 @@ import signal
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Literal
 from uuid import uuid4
 
 from fastapi import (
@@ -34,6 +35,7 @@ from packages.contracts import (
     ChatMessage,
     IssueContext,
     MemoryScope,
+    ModelProfile,
     ProjectMember,
     ProjectRecord,
     RemoteHost,
@@ -49,12 +51,23 @@ from packages.contracts import (
 )
 from packages.dev_workflows import DevelopmentWorkflowService
 from packages.handover_agent import HandoverAgent
-from packages.local_settings import LocalSettings, LocalSettingsStore, LocalUser
+from packages.local_settings import (
+    AgentModelPolicy,
+    LocalSettings,
+    LocalSettingsError,
+    LocalSettingsStore,
+    LocalUser,
+    ModelEndpoint,
+    ModelTarget,
+)
 from packages.memory import LongTermMemoryStore
 from packages.model_gateway import (
     AnthropicAdapter,
     FakeModel,
+    ModelChoiceError,
+    ModelChoiceService,
     ModelGateway,
+    ModelRouter,
     OllamaAdapter,
     OpenAIAdapter,
 )
@@ -145,8 +158,11 @@ class RunCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     message: ChatMessage
+    model_mode: Literal["manual", "auto"] | None = None
+    endpoint_id: str | None = None
     provider: str | None = None
     model: str | None = None
+    allowed_models: list["ModelTargetRequest"] = Field(default_factory=list)
     run_id: str | None = None
 
 
@@ -206,12 +222,40 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class ModelTargetRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    endpoint_id: str = Field(min_length=1, max_length=100)
+    model: str = Field(min_length=1, max_length=200)
+
+
+class ModelEndpointRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=100)
+    name: str = Field(min_length=1, max_length=200)
+    provider: Literal["fake", "openai", "anthropic", "coding_plan", "ollama"]
+    base_url: str | None = Field(default=None, max_length=2048)
+    api_key: str | None = Field(default=None, max_length=8192)
+    clear_api_key: bool = False
+    models: list[str] = Field(default_factory=list, max_length=100)
+    enabled: bool = True
+
+
+class AgentModelPolicyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["manual", "auto"]
+    allowed_models: list[ModelTargetRequest] = Field(min_length=1)
+
+
 class RuntimeSettingsRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     idle_shutdown_minutes: int = Field(ge=1, le=1_440)
-    model_provider: str = Field(min_length=1, max_length=100)
-    model_name: str = Field(min_length=1, max_length=200)
+    model_endpoints: list[ModelEndpointRequest] = Field(min_length=1, max_length=50)
+    default_model: ModelTargetRequest
+    agent_model_policy: AgentModelPolicyRequest
 
 
 class LocalUserCreateRequest(BaseModel):
@@ -401,21 +445,44 @@ def create_app(
         _require_local_administrator(actor_id)
         return _public_runtime_settings(app.state.local_settings)
 
+    @app.get("/api/v1/model-options", tags=["settings"])
+    def get_model_options(actor_id: str = Depends(_authenticated_actor)) -> dict[str, object]:
+        del actor_id
+        settings: LocalSettings = app.state.local_settings
+        endpoint_names = {
+            endpoint.endpoint_id: endpoint.name
+            for endpoint in settings.model_endpoints
+            if endpoint.enabled
+        }
+        return {
+            "models": [
+                {
+                    "endpoint_id": target.endpoint_id,
+                    "endpoint_name": endpoint_names[target.endpoint_id],
+                    "model": target.model,
+                }
+                for target in settings.available_targets()
+            ],
+            "default_model": _target_to_dict(settings.default_model),
+            "agent_model_policy": {
+                "mode": settings.agent_model_policy.mode,
+                "allowed_models": [
+                    _target_to_dict(target)
+                    for target in settings.agent_model_policy.allowed_models
+                ],
+            },
+        }
+
     @app.put("/api/v1/settings", tags=["settings"])
     def update_runtime_settings(
         payload: RuntimeSettingsRequest, actor_id: str = Depends(_authenticated_actor)
     ) -> dict[str, object]:
         _require_local_administrator(actor_id)
         current: LocalSettings = app.state.local_settings
-        updated = LocalSettings(
-            idle_shutdown_minutes=payload.idle_shutdown_minutes,
-            model_provider=payload.model_provider.strip().lower(),
-            model_name=payload.model_name.strip(),
-            users=current.users,
-        )
         try:
+            updated = _settings_from_request(payload, current)
             _model_gateway(updated)
-        except ValueError as exc:
+        except (LocalSettingsError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         app.state.settings_store.save(updated)
         app.state.local_settings = updated
@@ -434,8 +501,9 @@ def create_app(
             raise HTTPException(status_code=409, detail="user id is already configured or reserved")
         updated = LocalSettings(
             idle_shutdown_minutes=current.idle_shutdown_minutes,
-            model_provider=current.model_provider,
-            model_name=current.model_name,
+            model_endpoints=current.model_endpoints,
+            default_model=current.default_model,
+            agent_model_policy=current.agent_model_policy,
             users=(
                 *current.users,
                 LocalUser(payload.id, payload.display_name, hash_password(payload.password)),
@@ -749,14 +817,32 @@ def create_app(
         if session is None:
             raise HTTPException(status_code=404, detail=f"session not found: {session_id}")
         _require_session_access(app, session, actor_id, SessionPermission.COLLABORATE)
+        try:
+            selection = await _select_runtime_model(app, payload)
+        except ModelChoiceError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         SessionRepository(_database(app)).append_message(session_id, payload.message)
-        configured: LocalSettings = app.state.local_settings
         request = RunRequest(
             thread_id=session.thread_id,
             run_id=payload.run_id or str(uuid4()),
-            provider=payload.provider or configured.model_provider,
-            model=payload.model or configured.model_name,
+            provider=selection.target.endpoint_id,
+            model=selection.target.model,
             messages=[payload.message],
+            metadata={
+                "model_selection": {
+                    "mode": selection.mode,
+                    "reason": selection.reason,
+                    "fallback_used": selection.fallback_used,
+                    "selector": (
+                        {
+                            "endpoint_id": selection.selector.endpoint_id,
+                            "model": selection.selector.model,
+                        }
+                        if selection.selector
+                        else None
+                    ),
+                }
+            },
         )
         app.state.active_run_count += 1
         try:
@@ -797,14 +883,29 @@ def create_app(
             while True:
                 payload = RunCreateRequest.model_validate(await websocket.receive_json())
                 app.state.last_user_activity = time.monotonic()
+                selection = await _select_runtime_model(app, payload)
                 SessionRepository(_database(app)).append_message(session_id, payload.message)
-                configured: LocalSettings = app.state.local_settings
                 request = RunRequest(
                     thread_id=session.thread_id,
                     run_id=payload.run_id or str(uuid4()),
-                    provider=payload.provider or configured.model_provider,
-                    model=payload.model or configured.model_name,
+                    provider=selection.target.endpoint_id,
+                    model=selection.target.model,
                     messages=[payload.message],
+                    metadata={
+                        "model_selection": {
+                            "mode": selection.mode,
+                            "reason": selection.reason,
+                            "fallback_used": selection.fallback_used,
+                            "selector": (
+                                {
+                                    "endpoint_id": selection.selector.endpoint_id,
+                                    "model": selection.selector.model,
+                                }
+                                if selection.selector
+                                else None
+                            ),
+                        }
+                    },
                 )
                 final_text = None
                 app.state.active_run_count += 1
@@ -911,6 +1012,7 @@ def create_app(
             project_root=Path(project.root_path),
             profile_store=RepositoryProfileRepository(database),
             workflow_store=WorkflowRepository(database),
+            router=_workflow_model_router(app.state.local_settings),
         ).run(
             IssueContext(
                 description=payload.description,
@@ -1258,30 +1360,173 @@ def _fixed_auth_users() -> tuple[AuthenticatedUser, ...]:
 
 
 def _model_gateway(settings: LocalSettings) -> ModelGateway:
-    provider = settings.model_provider
-    if provider == "fake":
-        adapter = FakeModel(model=settings.model_name)
-    elif provider == "openai":
-        adapter = OpenAIAdapter(model=settings.model_name)
-    elif provider == "anthropic":
-        adapter = AnthropicAdapter(model=settings.model_name)
-    elif provider == "ollama":
-        # TODO（后续模型批次）：Ollama 仅保留显式未实现适配器，调用时返回明确状态。
-        adapter = OllamaAdapter(model=settings.model_name)
-    else:
-        raise ValueError("model provider must be one of: fake, openai, anthropic, ollama")
-    return ModelGateway([adapter])
+    settings.validate()
+    adapters = []
+    for endpoint in settings.model_endpoints:
+        if not endpoint.enabled:
+            continue
+        for model in endpoint.resolve_models():
+            common = {"model": model, "provider_id": endpoint.endpoint_id}
+            if endpoint.provider == "fake":
+                adapter = FakeModel(**common)
+            elif endpoint.provider in {"openai", "coding_plan"}:
+                adapter = OpenAIAdapter(
+                    **common,
+                    api_key=endpoint.resolve_api_key(),
+                    base_url=endpoint.resolve_base_url(),
+                )
+            elif endpoint.provider == "anthropic":
+                adapter = AnthropicAdapter(
+                    **common,
+                    api_key=endpoint.resolve_api_key(),
+                    base_url=endpoint.resolve_base_url(),
+                )
+            elif endpoint.provider == "ollama":
+                # TODO（后续模型批次）：Ollama 仅保留显式未实现适配器。
+                adapter = OllamaAdapter(**common)
+            else:
+                raise ValueError(f"unsupported model provider protocol: {endpoint.provider}")
+            adapters.append(adapter)
+    return ModelGateway(adapters)
+
+
+def _workflow_model_router(settings: LocalSettings) -> ModelRouter:
+    permitted = settings.agent_model_policy.allowed_models
+    profiles = [
+        ModelProfile(
+            id=target.key,
+            provider=target.endpoint_id,
+            model=target.model,
+            capabilities=["text", "workspace.read"],
+            max_tokens=200_000,
+            fallback_rank=0 if target == settings.default_model else index + 1,
+            quality_rank=max(1, len(permitted) - index),
+        )
+        for index, target in enumerate(permitted)
+    ]
+    return ModelRouter(profiles)
 
 
 def _public_runtime_settings(settings: LocalSettings) -> dict[str, object]:
     return {
         "idle_shutdown_minutes": settings.idle_shutdown_minutes,
+        # Keep these two fields for older CLI/client display code.
         "model_provider": settings.model_provider,
         "model_name": settings.model_name,
+        "model_endpoints": [
+            {
+                "id": endpoint.endpoint_id,
+                "name": endpoint.name,
+                "provider": endpoint.provider,
+                "base_url": endpoint.base_url,
+                "effective_base_url": endpoint.resolve_base_url(),
+                "api_key_configured": bool(endpoint.resolve_api_key()),
+                "api_key_source": endpoint.api_key_source(),
+                "models": list(endpoint.models),
+                "effective_models": list(endpoint.resolve_models()),
+                "enabled": endpoint.enabled,
+                "environment": endpoint.environment_names(),
+            }
+            for endpoint in settings.model_endpoints
+        ],
+        "default_model": _target_to_dict(settings.default_model),
+        "agent_model_policy": {
+            "mode": settings.agent_model_policy.mode,
+            "allowed_models": [
+                _target_to_dict(target)
+                for target in settings.agent_model_policy.allowed_models
+            ],
+        },
         "users": [
             {"id": user.user_id, "display_name": user.display_name} for user in settings.users
         ],
     }
+
+
+def _settings_from_request(
+    payload: RuntimeSettingsRequest, current: LocalSettings
+) -> LocalSettings:
+    current_endpoints = {
+        endpoint.endpoint_id: endpoint for endpoint in current.model_endpoints
+    }
+    endpoints: list[ModelEndpoint] = []
+    for value in payload.model_endpoints:
+        endpoint_id = value.id.strip().lower()
+        existing = current_endpoints.get(endpoint_id)
+        if value.clear_api_key:
+            api_key = None
+        elif value.api_key is not None and value.api_key.strip():
+            api_key = value.api_key.strip()
+        else:
+            api_key = existing.api_key if existing else None
+        endpoints.append(
+            ModelEndpoint(
+                endpoint_id=endpoint_id,
+                name=value.name.strip(),
+                provider=value.provider,
+                base_url=(
+                    value.base_url.strip()
+                    if value.base_url and value.base_url.strip()
+                    else None
+                ),
+                api_key=api_key,
+                models=tuple(
+                    dict.fromkeys(model.strip() for model in value.models if model.strip())
+                ),
+                enabled=value.enabled,
+            )
+        )
+    updated = LocalSettings(
+        idle_shutdown_minutes=payload.idle_shutdown_minutes,
+        model_endpoints=tuple(endpoints),
+        default_model=_target_from_request(payload.default_model),
+        agent_model_policy=AgentModelPolicy(
+            mode=payload.agent_model_policy.mode,
+            allowed_models=tuple(
+                _target_from_request(target)
+                for target in payload.agent_model_policy.allowed_models
+            ),
+        ),
+        users=current.users,
+    )
+    return updated.validate()
+
+
+async def _select_runtime_model(app: FastAPI, payload: RunCreateRequest):
+    settings: LocalSettings = app.state.local_settings
+    if (
+        payload.endpoint_id
+        and payload.provider
+        and payload.endpoint_id.strip().lower() != payload.provider.strip().lower()
+    ):
+        raise ModelChoiceError("endpoint_id and legacy provider must match when both are set")
+    requested_endpoint = payload.endpoint_id or payload.provider
+    if bool(requested_endpoint) != bool(payload.model):
+        raise ModelChoiceError("manual model selection requires both endpoint_id and model")
+    requested = (
+        ModelTarget(requested_endpoint.strip().lower(), payload.model.strip())
+        if requested_endpoint and payload.model
+        else None
+    )
+    allowed = (
+        tuple(_target_from_request(target) for target in payload.allowed_models)
+        if payload.allowed_models
+        else None
+    )
+    return await ModelChoiceService(_runtime(app).gateway, settings).choose(
+        messages=[payload.message],
+        mode=payload.model_mode,
+        requested=requested,
+        allowed=allowed,
+    )
+
+
+def _target_from_request(value: ModelTargetRequest) -> ModelTarget:
+    return ModelTarget(value.endpoint_id.strip().lower(), value.model.strip())
+
+
+def _target_to_dict(target: ModelTarget) -> dict[str, str]:
+    return {"endpoint_id": target.endpoint_id, "model": target.model}
 
 
 def _require_local_administrator(actor_id: str) -> None:

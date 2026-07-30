@@ -62,10 +62,13 @@ class LangChainAdapter(ChatModelAdapter):
         self,
         *,
         model: str,
+        provider_id: str | None = None,
         chat_model: BaseChatModel | None = None,
         api_key: str | SecretStr | None = None,
         capabilities: ModelCapabilities,
     ) -> None:
+        if provider_id:
+            self.provider = provider_id
         self.model = model
         self._chat_model = chat_model
         self._api_key = api_key
@@ -236,6 +239,7 @@ class OpenAIAdapter(LangChainAdapter):
         self,
         model: str = "gpt-4o-mini",
         *,
+        provider_id: str | None = None,
         chat_model: BaseChatModel | None = None,
         api_key: str | SecretStr | None = None,
         base_url: str | None = None,
@@ -243,6 +247,7 @@ class OpenAIAdapter(LangChainAdapter):
         self._base_url = base_url
         super().__init__(
             model=model,
+            provider_id=provider_id,
             chat_model=chat_model,
             api_key=api_key,
             capabilities=ModelCapabilities(
@@ -281,11 +286,15 @@ class AnthropicAdapter(LangChainAdapter):
         self,
         model: str = "claude-3-5-sonnet-latest",
         *,
+        provider_id: str | None = None,
         chat_model: BaseChatModel | None = None,
         api_key: str | SecretStr | None = None,
+        base_url: str | None = None,
     ) -> None:
+        self._base_url = base_url
         super().__init__(
             model=model,
+            provider_id=provider_id,
             chat_model=chat_model,
             api_key=api_key,
             capabilities=ModelCapabilities(
@@ -309,6 +318,8 @@ class AnthropicAdapter(LangChainAdapter):
         kwargs: dict[str, Any] = {"model": self.model}
         if api_key:
             kwargs["api_key"] = api_key
+        if self._base_url:
+            kwargs["base_url"] = self._base_url
         return ChatAnthropic(**kwargs)
 
     def _content_for_block(self, block: Any) -> str | dict[str, Any]:
@@ -337,7 +348,9 @@ class OllamaAdapter(ChatModelAdapter):
 
     provider = "ollama"
 
-    def __init__(self, model: str = "llama3.2") -> None:
+    def __init__(self, model: str = "llama3.2", *, provider_id: str | None = None) -> None:
+        if provider_id:
+            self.provider = provider_id
         self.model = model
 
     # TODO（后续模型批次）：接入 Ollama 客户端后再实现调用；当前必须返回明确未实现错误。
@@ -382,7 +395,11 @@ class FakeModel(ChatModelAdapter):
         model: str = "fake-model",
         response: str | None = None,
         delay: float = 0,
+        *,
+        provider_id: str | None = None,
     ) -> None:
+        if provider_id:
+            self.provider = provider_id
         self.model = model
         self.response = response
         self.delay = delay

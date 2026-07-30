@@ -4,6 +4,7 @@ from .adapters import AnthropicAdapter, FakeModel, OllamaAdapter, OpenAIAdapter
 from .errors import AdapterNotImplementedError, ModelAdapterError, UnsupportedCapabilityError
 from .gateway import ChatModelAdapter, ModelGateway
 from .router import ModelRouter, ModelRoutingError, default_model_router
+from .selection import ModelChoiceError, ModelChoiceService, RuntimeModelSelection
 
 __all__ = [
     "AdapterNotImplementedError",
@@ -14,6 +15,9 @@ __all__ = [
     "ModelGateway",
     "ModelRouter",
     "ModelRoutingError",
+    "ModelChoiceError",
+    "ModelChoiceService",
+    "RuntimeModelSelection",
     "default_model_router",
     "OpenAIAdapter",
     "OllamaAdapter",

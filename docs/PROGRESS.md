@@ -1,6 +1,6 @@
 # DevPilot 实施进度
 
-> 最后更新：2026-07-29 03:30（Asia/Shanghai）
+> 最后更新：2026-07-31（Asia/Shanghai）
 > 当前批次：B8，95%（容器运行验收待执行）
 
 进度事实源为 [`progress.json`](progress.json)。
@@ -25,6 +25,11 @@
 - 远程 Host 配对码只保存摘要，十分钟后失效且成功配对后不可重放；迁移、SQLite 备份、readiness、附件限制、登录限流和浏览器安全响应头已经落地。
 - 已提交 Dockerfile、Docker Compose、发布候选版本 `0.1.0rc1` 及部署、升级和回滚指南。
 - 已通过 `53 passed`、`ruff check .`、`devpilot doctor`、Vite production build、数据库升级/降级回归和 `git diff --check`。
+- 完成 B8 多模型设置扩展：支持多组 URL/API Key/模型、Coding Plan、环境变量回退、Web 管理、
+  逐次指定模型及受允许范围约束的 LLM 自动选模。
+- 多模型扩展已通过 `83 passed`、Ruff、Vite production build；新增设置/凭据模块覆盖率 90%，
+  使用临时 DeepSeek Key 对
+  Anthropic/OpenAI 兼容协议及自动选模完成最小真实验证，凭据仅在本地忽略配置中。
 
 ## 待完成的发布验收
 
