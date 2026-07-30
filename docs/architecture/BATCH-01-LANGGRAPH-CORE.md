@@ -46,3 +46,20 @@ tests/
 ## 完成后的下一步
 
 B2 接入工具注册、PolicyEngine、文件/搜索/补丁/Shell/Git 工具，以及带审计的人工审批恢复流程。
+
+## B8-R2 真实 Agent 纠偏
+
+原 B1 的最小图只会执行 API 预填充工具，模型输出文本后立即完成。B8-R2 已把主链纠正为：
+
+```text
+call_model
+  ├─ ModelToolCall → execute_tools / approval → Tool Result → call_model
+  └─ final text → verify → finalize
+```
+
+模型回合、工具调用、Token 和墙钟时间均有服务端硬上限；相同工具/参数/结果连续三次或连续三次
+无进展会失败终止。工具调用历史、累计 usage、verification 和 stop reason 都保存在图状态和
+checkpoint 中。普通文本问答仍沿无工具分支完成。
+
+真实 `deepseek-openai/deepseek-v4-flash` 已通过流式图调用 `file.read`，ToolRuntime 执行后把
+结果回注同一模型会话，再由模型生成最终回答。

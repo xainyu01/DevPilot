@@ -63,6 +63,16 @@ class ToolResultBlock(ContentBlock):
     is_error: bool = False
 
 
+class ModelToolCall(BaseModel):
+    """One provider-neutral tool request emitted by a model."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    call_id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    arguments: dict[str, Any]
+
+
 ContentBlockValue = Annotated[
     TextBlock | ImageBlock | AudioBlock | DocumentBlock | ToolResultBlock,
     Field(discriminator="type"),
@@ -75,6 +85,7 @@ class ChatMessage(BaseModel):
     role: Literal["system", "user", "assistant", "tool"]
     content: list[ContentBlockValue] = Field(min_length=1)
     name: str | None = None
+    tool_calls: list[ModelToolCall] = Field(default_factory=list)
 
     @classmethod
     def from_text(
@@ -144,16 +155,6 @@ class TokenUsage(BaseModel):
         if self.total_tokens == 0 and (self.input_tokens or self.output_tokens):
             self.total_tokens = self.input_tokens + self.output_tokens
         return self
-
-
-class ModelToolCall(BaseModel):
-    """One provider-neutral tool request emitted by a model."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    call_id: str = Field(min_length=1)
-    name: str = Field(min_length=1)
-    arguments: dict[str, Any]
 
 
 class ModelStopReason(StrEnum):
@@ -294,6 +295,8 @@ class AgentState(TypedDict, total=False):
     messages: list[ChatMessage]
     tool_calls: list[ToolCall]
     tool_results: list[ToolResult]
+    tool_definitions: list[dict[str, Any]]
+    tool_history: list[str]
     pending_approval: ApprovalRequest | None
     context_loaded: bool
     normalized: bool
@@ -301,6 +304,19 @@ class AgentState(TypedDict, total=False):
     response: ChatResponse | None
     final_text: str | None
     usage: TokenUsage
+    token_usage: TokenUsage
+    iteration: int
+    max_iterations: int
+    max_tool_calls: int
+    max_tokens: int
+    max_wall_time_seconds: float
+    started_monotonic: float
+    tool_call_count: int
+    consecutive_no_progress: int
+    workspace_snapshot: dict[str, Any]
+    acceptance_criteria: list[str]
+    verification: dict[str, Any]
+    stop_reason: str | None
     status: RunStatus
     pause_reason: str | None
     cancel_requested: bool
@@ -334,6 +350,11 @@ class RunRequest(BaseModel):
     provider: ModelProvider | str
     model: str
     messages: list[ChatMessage] = Field(min_length=1)
+    acceptance_criteria: list[str] = Field(default_factory=list, max_length=50)
+    max_iterations: int = Field(default=20, ge=1, le=20)
+    max_tool_calls: int = Field(default=60, ge=0, le=60)
+    max_tokens: int = Field(default=200_000, ge=1, le=200_000)
+    max_wall_time_seconds: float = Field(default=900, gt=0, le=900)
     tool_calls: list[ToolCall] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -349,6 +370,8 @@ class RunResult(BaseModel):
     error: CapabilityError | dict[str, Any] | None = None
     tool_results: list[ToolResult] = Field(default_factory=list)
     pending_approval: ApprovalRequest | None = None
+    usage: TokenUsage = Field(default_factory=TokenUsage)
+    stop_reason: str | None = None
 
 
 class RunEvent(BaseModel):

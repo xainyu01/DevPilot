@@ -360,7 +360,12 @@ class LangChainAdapter(ChatModelAdapter):
             return block.content
         raise TypeError(f"Unsupported content block: {type(block).__name__}")
 
-    def to_langchain_messages(self, messages: list[ChatMessage]) -> list[BaseMessage]:
+    def to_langchain_messages(
+        self,
+        messages: list[ChatMessage],
+        tools: list[dict[str, Any]] | None = None,
+    ) -> list[BaseMessage]:
+        canonical_to_provider, _ = _provider_tool_names(tools or [])
         converted: list[BaseMessage] = []
         for message in messages:
             parts = [self._content_for_block(block) for block in message.content]
@@ -372,7 +377,28 @@ class LangChainAdapter(ChatModelAdapter):
             if message.role == "system":
                 converted.append(SystemMessage(content=content, name=message.name))
             elif message.role == "assistant":
-                converted.append(AIMessage(content=content, name=message.name))
+                provider_calls = []
+                for call in message.tool_calls:
+                    provider_name = canonical_to_provider.get(call.name)
+                    if provider_name is None:
+                        raise ToolCallProtocolError(
+                            f"assistant history references unavailable tool {call.name!r}"
+                        )
+                    provider_calls.append(
+                        {
+                            "id": call.call_id,
+                            "name": provider_name,
+                            "args": call.arguments,
+                            "type": "tool_call",
+                        }
+                    )
+                converted.append(
+                    AIMessage(
+                        content=content,
+                        name=message.name,
+                        tool_calls=provider_calls,
+                    )
+                )
             elif message.role == "tool":
                 tool_id = next(
                     (
@@ -383,7 +409,15 @@ class LangChainAdapter(ChatModelAdapter):
                     "unknown",
                 )
                 converted.append(
-                    ToolMessage(content=content, tool_call_id=tool_id, name=message.name)
+                    ToolMessage(
+                        content=content,
+                        tool_call_id=tool_id,
+                        name=(
+                            canonical_to_provider.get(message.name, message.name)
+                            if message.name
+                            else None
+                        ),
+                    )
                 )
             else:
                 converted.append(HumanMessage(content=content, name=message.name))
@@ -392,7 +426,7 @@ class LangChainAdapter(ChatModelAdapter):
     async def invoke(self, request: ChatRequest) -> ChatResponse:
         self.validate_request(request)
         message = await self._bound_model(request).ainvoke(
-            self.to_langchain_messages(request.messages),
+            self.to_langchain_messages(request.messages, request.tools),
             config={"metadata": request.metadata},
         )
         if not isinstance(message, BaseMessage):
@@ -432,7 +466,7 @@ class LangChainAdapter(ChatModelAdapter):
         response_metadata: dict[str, Any] = {}
         finish_reason: str | None = None
         async for chunk in self._bound_model(request).astream(
-            self.to_langchain_messages(request.messages),
+            self.to_langchain_messages(request.messages, request.tools),
             config={"metadata": request.metadata},
         ):
             if not isinstance(chunk, BaseMessage):
@@ -746,7 +780,7 @@ class FakeModel(ChatModelAdapter):
             image=True,
             audio=False,
             pdf=True,
-            tools=False,
+            tools=True,
             structured_output=False,
         )
 

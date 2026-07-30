@@ -1,7 +1,7 @@
 # DevPilot 实施进度
 
 > 最后更新：2026-07-31（Asia/Shanghai）
-> 当前批次：B8-R2（LangGraph 自主工具循环）
+> 当前批次：B8-R3（项目级编程工具与安全边界）
 
 进度事实源为 [`progress.json`](progress.json)。
 
@@ -15,9 +15,10 @@
 | B5 | 已完成 | 100% | CLI、React/Vite 工作台与会话事件 |
 | B6 | 已完成 | 100% | Windows-first 本地 Web 与平台端口 |
 | B7 | 已完成 | 100% | 用户、团队、RBAC、共享与远程 Host |
-| B8 | 进行中 | 74% | 稳定化、安全、真实 Agent 闭环、恢复、部署与发布 |
+| B8 | 进行中 | 78% | 稳定化、安全、真实 Agent 闭环、恢复、部署与发布 |
 | B8-R1 | 已完成 | 100% | ModelToolCall 契约、OpenAI/Anthropic 工具协议与 DeepSeek 真实冒烟 |
-| B8-R2 | 进行中 | 0% | LangGraph 自主工具循环、预算、重复检测与审批恢复 |
+| B8-R2 | 已完成 | 100% | LangGraph 自主工具循环、预算、重复检测与审批恢复 |
+| B8-R3 | 进行中 | 0% | 项目级编程工具、路径/进程安全与专用测试 |
 
 ## 下一阶段已确认
 
@@ -58,10 +59,15 @@ R1 已完成供应商无关 Tool Calling：OpenAI/Anthropic 适配器会原生�
 `deepseek-openai` 与 `deepseek-anthropic` 的 `deepseek-v4-flash` 已分别真实返回模型生成的
 `file.read({"path":"README.md"})`，不是请求预填充或本地硬编码结果。
 
+R2 已把模型 Tool Call 接入 LangGraph 自主循环：工具结果带原 call ID 返回模型，支持单回合多工具、
+失败修正、审批 interrupt/checkpoint 恢复，并由服务器限制模型回合、工具数、Token、墙钟时间以及
+重复/无进展循环。`deepseek-openai/deepseek-v4-flash` 已真实完成
+“读取 `README.md` → ToolRuntime 返回内容 → 模型回答首个标题”的流式闭环。
+
 - 问题分析：[REAL_AGENT_GAP_ANALYSIS.md](REAL_AGENT_GAP_ANALYSIS.md)
 - 完整纠偏计划：[REAL_AGENT_IMPLEMENTATION_PLAN.md](REAL_AGENT_IMPLEMENTATION_PLAN.md)
 
-下一步必须连续完成计划中的 R2～R7，并以 DeepSeek 自主产生 Tool Call、创建 Event Lens 文件、
+下一步必须连续完成计划中的 R3～R7，并以 DeepSeek 自主产生 Tool Call、创建 Event Lens 文件、
 执行测试和形成持久化证据作为发布门槛。不得由 DevPilot/Codex 手工代写验收项目代码。
 
 ## 其他待完成的发布验收

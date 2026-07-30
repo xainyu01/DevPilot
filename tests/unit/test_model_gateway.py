@@ -11,6 +11,8 @@ from packages.contracts import (
     ImageBlock,
     ModelProvider,
     ModelStopReason,
+    ModelToolCall,
+    ToolResultBlock,
 )
 from packages.model_gateway import (
     AdapterNotImplementedError,
@@ -29,15 +31,18 @@ class ToolSpyModel:
         self.response = response
         self.chunks = chunks or []
         self.bound_tools = None
+        self.last_messages = None
 
     def bind_tools(self, tools):
         self.bound_tools = tools
         return self
 
     async def ainvoke(self, messages, config=None):
+        self.last_messages = messages
         return self.response
 
     async def astream(self, messages, config=None):
+        self.last_messages = messages
         for chunk in self.chunks:
             yield chunk
 
@@ -214,6 +219,46 @@ async def test_anthropic_tool_use_block_is_normalized() -> None:
     assert model.bound_tools[0]["input_schema"]["type"] == "object"
     assert response.tool_calls[0].call_id == "toolu-1"
     assert response.stop_reason == ModelStopReason.TOOL_CALLS
+
+
+@pytest.mark.asyncio
+async def test_tool_call_and_result_history_use_transport_names() -> None:
+    model = ToolSpyModel(AIMessage(content="done"))
+    adapter = OpenAIAdapter(model="tool-model", chat_model=model)
+    call = ModelToolCall(
+        call_id="history-call",
+        name="file.read",
+        arguments={"path": "README.md"},
+    )
+    await adapter.invoke(
+        ChatRequest(
+            provider="openai",
+            model="tool-model",
+            messages=[
+                ChatMessage.from_text("user", "read"),
+                ChatMessage(
+                    role="assistant",
+                    content=[{"type": "text", "text": ""}],
+                    tool_calls=[call],
+                ),
+                ChatMessage(
+                    role="tool",
+                    name="file.read",
+                    content=[
+                        ToolResultBlock(
+                            tool_call_id="history-call",
+                            content="contents",
+                        )
+                    ],
+                ),
+            ],
+            tools=[read_tool()],
+        )
+    )
+
+    assert model.last_messages[1].tool_calls[0]["name"] == "file__read"
+    assert model.last_messages[2].name == "file__read"
+    assert model.last_messages[2].tool_call_id == "history-call"
 
 
 @pytest.mark.asyncio

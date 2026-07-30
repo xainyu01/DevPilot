@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -135,6 +137,21 @@ def _route_after_plan(state: AgentState) -> str:
     return "tools" if state.get("tool_calls") else "continue"
 
 
+def _route_after_model(state: AgentState) -> str:
+    result = _route_after_node(state)
+    if result != "continue":
+        return result
+    return "tools" if state.get("tool_calls") else "verify"
+
+
+def _route_after_verify(state: AgentState) -> str:
+    result = _route_after_node(state)
+    if result != "continue":
+        return result
+    verification = state.get("verification", {})
+    return "finalize" if verification.get("satisfied") else "model"
+
+
 def build_agent_graph(
     gateway: ModelGateway,
     *,
@@ -193,7 +210,7 @@ def build_agent_graph(
 
     async def normalize_input(state: AgentState) -> dict[str, Any]:
         async def operation(current: AgentState) -> dict[str, Any]:
-            request = _request_from_state(current)
+            request = _request_from_state(current, tool_runtime)
             try:
                 gateway.validate(request)
             except UnsupportedCapabilityError as exc:
@@ -209,9 +226,15 @@ def build_agent_graph(
     async def plan(state: AgentState) -> dict[str, Any]:
         async def operation(current: AgentState) -> dict[str, Any]:
             plan_items = ["load_context", "normalize_input", "plan"]
-            if current.get("tool_calls"):
-                plan_items.append("execute_tools")
-            plan_items.extend(["call_model", "finalize"])
+            plan_items.extend(
+                [
+                    "call_model",
+                    "route_model_output",
+                    "execute_tools",
+                    "verify",
+                    "finalize",
+                ]
+            )
             emit(RunEventType.PLAN_CREATED, state=current, node="plan", data={"steps": plan_items})
             return {"plan": plan_items, "status": RunStatus.RUNNING}
 
@@ -219,13 +242,44 @@ def build_agent_graph(
 
     async def call_model(state: AgentState) -> dict[str, Any]:
         async def operation(current: AgentState) -> dict[str, Any]:
-            request = _request_from_state(current)
+            iteration = int(current.get("iteration", 0))
+            max_iterations = int(current.get("max_iterations", 20))
+            if iteration >= max_iterations:
+                return {
+                    "status": RunStatus.FAILED,
+                    "stop_reason": "max_iterations_exceeded",
+                    "error": {
+                        "code": "agent_budget_exceeded",
+                        "message": f"model iteration limit {max_iterations} reached",
+                    },
+                }
+            started = float(current.get("started_monotonic", time.monotonic()))
+            max_wall_time = float(current.get("max_wall_time_seconds", 900))
+            if time.monotonic() - started >= max_wall_time:
+                return {
+                    "status": RunStatus.FAILED,
+                    "stop_reason": "wall_time_exceeded",
+                    "error": {
+                        "code": "agent_budget_exceeded",
+                        "message": f"wall time limit {max_wall_time:g}s reached",
+                    },
+                }
+            request = _request_from_state(current, tool_runtime)
             output: list[str] = []
             final_usage = TokenUsage()
+            model_tool_calls = []
+            finish_reason = None
+            stop_reason = None
+            response_metadata: dict[str, Any] = {}
             async for event in gateway.stream(request):
                 output.append(event.text)
                 if event.usage is not None:
                     final_usage = event.usage
+                if event.tool_call_complete and event.tool_call is not None:
+                    model_tool_calls.append(event.tool_call)
+                finish_reason = event.finish_reason or finish_reason
+                stop_reason = event.stop_reason or stop_reason
+                response_metadata.update(event.response_metadata)
                 if event.text:
                     emit(
                         RunEventType.MODEL_DELTA,
@@ -238,23 +292,75 @@ def build_agent_graph(
                 if run_control.pause_requested:
                     run_control.guard()
             text = "".join(output)
+            calls = [
+                ToolCall(
+                    call_id=call.call_id,
+                    name=call.name,
+                    arguments=call.arguments,
+                )
+                for call in model_tool_calls
+            ]
+            tool_call_count = int(current.get("tool_call_count", 0)) + len(calls)
+            max_tool_calls = int(current.get("max_tool_calls", 60))
+            if tool_call_count > max_tool_calls:
+                return {
+                    "status": RunStatus.FAILED,
+                    "stop_reason": "max_tool_calls_exceeded",
+                    "error": {
+                        "code": "agent_budget_exceeded",
+                        "message": f"tool call limit {max_tool_calls} exceeded",
+                    },
+                }
+            cumulative_usage = _add_usage(
+                TokenUsage.model_validate(current.get("token_usage", {})),
+                final_usage,
+            )
+            max_tokens = int(current.get("max_tokens", 200_000))
+            if cumulative_usage.total_tokens > max_tokens:
+                return {
+                    "status": RunStatus.FAILED,
+                    "stop_reason": "max_tokens_exceeded",
+                    "token_usage": cumulative_usage,
+                    "usage": cumulative_usage,
+                    "error": {
+                        "code": "agent_budget_exceeded",
+                        "message": f"token limit {max_tokens} exceeded",
+                    },
+                }
+            assistant_message = ChatMessage(
+                role="assistant",
+                content=[{"type": "text", "text": text}],
+                tool_calls=model_tool_calls,
+            )
             response = ChatResponse(
                 provider=request.provider,
                 model=request.model,
-                message=ChatMessage.from_text("assistant", text),
+                message=assistant_message,
+                tool_calls=model_tool_calls,
                 usage=final_usage,
-                finish_reason="stop",
+                finish_reason=finish_reason,
+                stop_reason=stop_reason or "unknown",
+                response_metadata=response_metadata,
             )
             emit(
                 RunEventType.MODEL_OUTPUT,
                 state=current,
                 node="call_model",
-                data={"text": text},
+                data={
+                    "text": text,
+                    "tool_calls": [call.model_dump(mode="json") for call in model_tool_calls],
+                    "iteration": iteration + 1,
+                    "usage": final_usage.model_dump(mode="json"),
+                },
             )
             return {
                 "messages": [*current.get("messages", []), response.message],
                 "response": response,
-                "usage": final_usage,
+                "tool_calls": calls,
+                "iteration": iteration + 1,
+                "tool_call_count": tool_call_count,
+                "token_usage": cumulative_usage,
+                "usage": cumulative_usage,
                 "status": RunStatus.RUNNING,
             }
 
@@ -272,6 +378,8 @@ def build_agent_graph(
                 }
             results = [ToolResult.model_validate(item) for item in current.get("tool_results", [])]
             messages = list(current.get("messages", []))
+            history = list(current.get("tool_history", []))
+            no_progress = int(current.get("consecutive_no_progress", 0))
             for raw_call in current.get("tool_calls", []):
                 call = ToolCall.model_validate(raw_call)
                 if any(
@@ -335,6 +443,7 @@ def build_agent_graph(
                 messages.append(
                     ChatMessage(
                         role="tool",
+                        name=call.name,
                         content=[
                             ToolResultBlock(
                                 tool_call_id=call.call_id,
@@ -344,15 +453,120 @@ def build_agent_graph(
                         ],
                     )
                 )
-            return {"tool_results": results, "messages": messages, "status": RunStatus.RUNNING}
+                fingerprint = json.dumps(
+                    {
+                        "name": call.name,
+                        "arguments": call.arguments,
+                        "status": result.status,
+                        "output": result.output,
+                        "error": result.error,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+                history.append(fingerprint)
+                if len(history) >= 3 and len(set(history[-3:])) == 1:
+                    return {
+                        "tool_results": results,
+                        "messages": messages,
+                        "tool_calls": [],
+                        "tool_history": history,
+                        "status": RunStatus.FAILED,
+                        "stop_reason": "repeated_tool_call",
+                        "error": {
+                            "code": "agent_no_progress",
+                            "message": "same tool call and result repeated three times",
+                        },
+                    }
+                no_progress = no_progress + 1 if result.status != "succeeded" else 0
+                if no_progress >= 3:
+                    return {
+                        "tool_results": results,
+                        "messages": messages,
+                        "tool_calls": [],
+                        "tool_history": history,
+                        "consecutive_no_progress": no_progress,
+                        "status": RunStatus.FAILED,
+                        "stop_reason": "consecutive_no_progress",
+                        "error": {
+                            "code": "agent_no_progress",
+                            "message": "three consecutive tool calls made no progress",
+                        },
+                    }
+            return {
+                "tool_results": results,
+                "messages": messages,
+                "tool_calls": [],
+                "tool_history": history,
+                "consecutive_no_progress": no_progress,
+                "status": RunStatus.RUNNING,
+            }
 
         return await node_wrapper("execute_tools", state, operation)
+
+    async def verify(state: AgentState) -> dict[str, Any]:
+        async def operation(current: AgentState) -> dict[str, Any]:
+            response = current.get("response")
+            text = response.text.strip() if isinstance(response, ChatResponse) else ""
+            if text:
+                return {
+                    "verification": {
+                        "satisfied": True,
+                        "reason": "model returned a final response without pending tool calls",
+                    },
+                    "status": RunStatus.RUNNING,
+                }
+            no_progress = int(current.get("consecutive_no_progress", 0)) + 1
+            if no_progress >= 3:
+                return {
+                    "verification": {
+                        "satisfied": False,
+                        "reason": "model returned no final text",
+                    },
+                    "consecutive_no_progress": no_progress,
+                    "status": RunStatus.FAILED,
+                    "stop_reason": "consecutive_no_progress",
+                    "error": {
+                        "code": "agent_no_progress",
+                        "message": "model returned no text or tool calls three times",
+                    },
+                }
+            feedback = ChatMessage.from_text(
+                "system",
+                "No usable final response or tool call was produced. Continue the task or "
+                "return a concise final answer.",
+            )
+            return {
+                "verification": {
+                    "satisfied": False,
+                    "reason": "model returned no final text",
+                },
+                "messages": [*current.get("messages", []), feedback],
+                "consecutive_no_progress": no_progress,
+                "status": RunStatus.RUNNING,
+            }
+
+        return await node_wrapper("verify", state, operation)
 
     async def finalize(state: AgentState) -> dict[str, Any]:
         async def operation(current: AgentState) -> dict[str, Any]:
             response = current.get("response")
             final_text = response.text if isinstance(response, ChatResponse) else None
-            return {"final_text": final_text, "status": RunStatus.COMPLETED}
+            if not current.get("verification", {}).get("satisfied"):
+                return {
+                    "final_text": None,
+                    "status": RunStatus.FAILED,
+                    "stop_reason": "verification_failed",
+                    "error": {
+                        "code": "verification_failed",
+                        "message": "server-side verification did not accept the model output",
+                    },
+                }
+            return {
+                "final_text": final_text,
+                "status": RunStatus.COMPLETED,
+                "stop_reason": "completed",
+            }
 
         return await node_wrapper("finalize", state, operation)
 
@@ -368,6 +582,7 @@ def build_agent_graph(
     graph.add_node("plan", plan)
     graph.add_node("execute_tools", execute_tools)
     graph.add_node("call_model", call_model)
+    graph.add_node("verify", verify)
     graph.add_node("finalize", finalize)
     graph.add_node("cancelled", cancelled)
     graph.add_node("failed", failed)
@@ -399,8 +614,23 @@ def build_agent_graph(
     )
     graph.add_conditional_edges(
         "call_model",
-        _route_after_node,
-        {"continue": "finalize", "cancelled": "cancelled", "failed": "failed"},
+        _route_after_model,
+        {
+            "tools": "execute_tools",
+            "verify": "verify",
+            "cancelled": "cancelled",
+            "failed": "failed",
+        },
+    )
+    graph.add_conditional_edges(
+        "verify",
+        _route_after_verify,
+        {
+            "finalize": "finalize",
+            "model": "call_model",
+            "cancelled": "cancelled",
+            "failed": "failed",
+        },
     )
     graph.add_edge("finalize", END)
     graph.add_edge("cancelled", END)
@@ -412,12 +642,32 @@ async def _return_update(**values: Any) -> dict[str, Any]:
     return values
 
 
-def _request_from_state(state: AgentState) -> ChatRequest:
+def _request_from_state(
+    state: AgentState,
+    tool_runtime: ToolRuntime | None,
+) -> ChatRequest:
+    capabilities = set(state.get("metadata", {}).get("capabilities", {"workspace.read"}))
+    tools = []
+    if tool_runtime is not None:
+        tools = [
+            definition.model_dump(mode="json")
+            for definition in tool_runtime.registry.definitions()
+            if set(definition.required_capabilities).issubset(capabilities)
+        ]
     return ChatRequest(
         provider=state["provider"],
         model=state["model"],
         messages=state["messages"],
+        tools=tools,
         metadata=state.get("metadata", {}),
+    )
+
+
+def _add_usage(first: TokenUsage, second: TokenUsage) -> TokenUsage:
+    return TokenUsage(
+        input_tokens=first.input_tokens + second.input_tokens,
+        output_tokens=first.output_tokens + second.output_tokens,
+        total_tokens=first.total_tokens + second.total_tokens,
     )
 
 
@@ -470,6 +720,21 @@ class AgentRuntime:
             "messages": request.messages,
             "tool_calls": request.tool_calls,
             "tool_results": [],
+            "tool_history": [],
+            "iteration": 0,
+            "max_iterations": request.max_iterations,
+            "max_tool_calls": request.max_tool_calls,
+            "max_tokens": request.max_tokens,
+            "max_wall_time_seconds": request.max_wall_time_seconds,
+            "started_monotonic": time.monotonic(),
+            "tool_call_count": len(request.tool_calls),
+            "consecutive_no_progress": 0,
+            "workspace_snapshot": {},
+            "acceptance_criteria": request.acceptance_criteria,
+            "verification": {},
+            "token_usage": TokenUsage(),
+            "usage": TokenUsage(),
+            "stop_reason": None,
             "status": RunStatus.RUNNING,
             "cancel_requested": False,
         }
@@ -555,6 +820,8 @@ class AgentRuntime:
                     checkpoint=checkpoint,
                     pending_approval=pending_approval,
                     tool_results=_tool_results_from_state(state),
+                    usage=TokenUsage.model_validate(state.get("token_usage", {})),
+                    stop_reason=state.get("stop_reason"),
                 )
             else:
                 status = RunStatus(state.get("status", RunStatus.FAILED))
@@ -573,6 +840,8 @@ class AgentRuntime:
                         events=list(handle.emitter.events),
                         checkpoint=checkpoint,
                         tool_results=_tool_results_from_state(state),
+                        usage=TokenUsage.model_validate(state.get("token_usage", {})),
+                        stop_reason=state.get("stop_reason"),
                     )
                 elif status == RunStatus.CANCELLED:
                     handle.status = status
@@ -584,6 +853,8 @@ class AgentRuntime:
                         events=list(handle.emitter.events),
                         checkpoint=checkpoint,
                         tool_results=_tool_results_from_state(state),
+                        usage=TokenUsage.model_validate(state.get("token_usage", {})),
+                        stop_reason=state.get("stop_reason"),
                     )
                 else:
                     handle.status = RunStatus.FAILED
@@ -603,6 +874,8 @@ class AgentRuntime:
                         checkpoint=checkpoint,
                         error=error,
                         tool_results=_tool_results_from_state(state),
+                        usage=TokenUsage.model_validate(state.get("token_usage", {})),
+                        stop_reason=state.get("stop_reason"),
                     )
         except asyncio.CancelledError:
             handle.status = RunStatus.CANCELLED
@@ -623,6 +896,7 @@ class AgentRuntime:
                 tool_results=_tool_results_from_checkpoint(
                     self.checkpoint_store.get(handle.request.thread_id, handle.request.run_id)
                 ),
+                stop_reason="cancelled",
             )
         except (AdapterNotImplementedError, ModelAdapterError) as exc:
             handle.status = RunStatus.FAILED
@@ -645,6 +919,7 @@ class AgentRuntime:
                 checkpoint=checkpoint,
                 error={"code": "model_adapter_error", "message": str(exc)},
                 tool_results=[],
+                stop_reason="model_adapter_error",
             )
         except Exception as exc:
             handle.status = RunStatus.FAILED
@@ -667,6 +942,7 @@ class AgentRuntime:
                 checkpoint=checkpoint,
                 error={"code": "runtime_error", "message": str(exc)},
                 tool_results=[],
+                stop_reason="runtime_error",
             )
         handle.result = output
         handle.done.set()
