@@ -40,6 +40,7 @@ def test_multiple_model_connections_are_saved_redacted_and_selectable(tmp_path: 
                         "api_key": "unit-test-key",
                         "models": ["coder-fast", "coder-quality"],
                         "enabled": True,
+                        "tool_capability": "supported",
                     },
                 ],
                 "default_model": {"endpoint_id": "router", "model": "controller"},
@@ -59,6 +60,7 @@ def test_multiple_model_connections_are_saved_redacted_and_selectable(tmp_path: 
         assert "api_key" not in coding
         assert coding["api_key_configured"] is True
         assert coding["api_key_source"] == "saved"
+        assert coding["tool_capability"] == "supported"
         options = client.get("/api/v1/model-options", headers=headers).json()
         assert options["agent_model_policy"]["mode"] == "auto"
         assert len(options["models"]) == 3

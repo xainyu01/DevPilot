@@ -19,6 +19,7 @@ OpenAI 和 Anthropic 协议。
 | `api_key` | 字符串，可为 `null` | 本地保存的密钥 |
 | `models` | 字符串数组 | 此连接提供的模型名称，可以有多项 |
 | `enabled` | 布尔值 | 是否注册连接及其模型 |
+| `tool_capability` | `supported` / `unsupported` / `unknown` | 原生 Tool Calling 探测结果 |
 
 协议值：
 
@@ -49,7 +50,8 @@ OpenAI 和 Anthropic 协议。
         "base_url": "https://api.example.com/v1",
         "api_key": null,
         "models": ["coder-fast", "coder-pro"],
-        "enabled": true
+        "enabled": true,
+        "tool_capability": "unknown"
       },
       {
         "id": "anthropic-gateway",
@@ -58,7 +60,8 @@ OpenAI 和 Anthropic 协议。
         "base_url": "https://anthropic.example.com",
         "api_key": null,
         "models": ["claude-compatible-model"],
-        "enabled": true
+        "enabled": true,
+        "tool_capability": "supported"
       }
     ],
     "default": {
@@ -84,6 +87,8 @@ OpenAI 和 Anthropic 协议。
 - `models.agent.allowed_models` 不能为空，且每一项都必须属于已启用连接。
 - 同一连接的模型名称自动去重；名称区分大小写。
 - `models.agent.mode` 只能是 `manual` 或 `auto`。
+- `tool_capability=unknown` 允许管理员执行显式冒烟；确认不支持后应保存为 `unsupported`，
+  编程 Agent 不再把任务派给该连接。
 - Web 中 API Key 输入框留空不会覆盖已有值；“清除已保存 Key”会删除本地值并恢复环境变量回退。
 - 旧版 `{ "model": { "provider": "...", "name": "..." } }` 文件仍可读取，下一次通过 Web 保存后
   会转换为新格式。
@@ -137,6 +142,21 @@ Token 上限和隐私级别过滤，再按 fallback、成本、延迟和质量�
 
 研发工作流创建的 Supervisor 和子 Agent 也只会获得 `allowed_models` 中的模型配置。Agent 或用户输入
 不能扩展这个上限。
+
+## 原生 Tool Calling
+
+OpenAI-compatible 与 Anthropic-compatible 连接使用各自原生 tools/tool_use 协议。模型响应会统一转换为
+`ModelToolCall(call_id, name, arguments)`；参数必须是合法 JSON 对象并通过对应 JSON Schema，否则整次
+模型回合失败，不会容错执行。内部工具继续使用 `file.read` 等点号名称；适配器只在供应商传输边界编码
+为其允许的名称，并在响应后无损还原。
+
+可用本地忽略配置做凭据安全的只读冒烟：
+
+```powershell
+uv --cache-dir .uv-cache run python scripts/deepseek_tool_call_smoke.py
+```
+
+脚本只输出 endpoint、模型、usage、请求标识和模型生成的工具调用，不输出 API Key。
 
 ## 密钥与用户安全
 

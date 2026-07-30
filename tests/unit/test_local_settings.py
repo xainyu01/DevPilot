@@ -46,6 +46,7 @@ def test_multiple_connections_save_keys_and_use_environment_fallbacks(tmp_path: 
         models=("coder-large", "coder-fast"),
         base_url="https://coding.example.test/v1",
         api_key="unit-test-key",
+        tool_capability="supported",
     )
     environment = ModelEndpoint(
         endpoint_id="team-gateway",
@@ -90,6 +91,7 @@ def test_multiple_connections_save_keys_and_use_environment_fallbacks(tmp_path: 
 
     assert loaded.model_endpoints[0].api_key == "unit-test-key"
     assert loaded.model_endpoints[0].models == ("coder-large", "coder-fast")
+    assert loaded.model_endpoints[0].tool_capability == "supported"
     assert loaded.agent_model_policy.mode == "auto"
 
 

@@ -1,8 +1,8 @@
 {
-  "overall_percent": 90,
-  "current_batch": "B8-R1",
-  "next_action": "立即执行 R1 供应商无关 Tool Calling，验收并提交后在同一对话自动继续 R2～R7，直到真实 DeepSeek E2E 完成。",
-  "updated_at": "2026-07-31T01:25:49+08:00",
+  "overall_percent": 91,
+  "current_batch": "B8-R2",
+  "next_action": "执行 R2 LangGraph 自主工具循环，验收并提交后继续 R3～R7。",
+  "updated_at": "2026-07-31T02:20:00+08:00",
   "constraints": [
     "普通文档放在 docs/",
     "Python 依赖只由 uv 管理并提交 uv.lock",
@@ -104,7 +104,7 @@
       "id": "B8",
       "title": "阶段 8：稳定化与发布",
       "status": "进行中",
-      "percent": 70,
+      "percent": 74,
       "scope": ["安全加固", "恢复", "迁移", "备份", "真实 Agent 闭环", "Docker 发布"],
       "completed": [
         "固定 B7 用户写入 users 表，并改用可跨重启验证的 HS256 JWT",
@@ -114,14 +114,15 @@
         "添加 SQLite 备份命令、B8 Alembic 迁移、Dockerfile、Compose 和发布指南",
         "通过完整 pytest、Ruff、doctor、Vite build 与迁移回归",
         "完成多组模型连接、Coding Plan、环境变量回退、Web 配置和受限自动选模扩展",
-        "通过 83 项测试、设置/凭据模块 90% 覆盖率、Ruff、Vite build 和 DeepSeek 双协议最小真实调用"
+        "通过 83 项测试、设置/凭据模块 90% 覆盖率、Ruff、Vite build 和 DeepSeek 双协议最小真实调用",
+        "完成供应商无关 ModelToolCall、严格 JSON Schema 校验、OpenAI/Anthropic 工具协议和流式参数合并；DeepSeek 双协议均真实产生 file.read Tool Call"
       ],
       "in_progress": [
-        "修复真实 Agent 闭环：当前模型只能返回代码文本，不能自主产生 Tool Call、写文件或运行测试",
+        "继续连接 LangGraph 自主工具循环、项目级写入/测试工具和完成验证",
         "在 Docker 可用的环境执行 Compose 配置和容器启动健康检查"
       ],
       "next_steps": [
-        "执行 docs/REAL_AGENT_IMPLEMENTATION_PLAN.md 的 R1～R7",
+        "执行 docs/REAL_AGENT_IMPLEMENTATION_PLAN.md 的 R2～R7",
         "使用 DeepSeek 通过真实 FastAPI/WebSocket 在空目录自主创建 Event Lens 项目并运行测试",
         "运行 docker compose config",
         "运行 docker compose up --build -d 并验证 /healthz 与 /readyz"
@@ -134,16 +135,32 @@
     {
       "id": "B8-R1",
       "title": "B8 纠偏 R1：供应商无关 Tool Calling",
+      "status": "已完成",
+      "percent": 100,
+      "scope": ["ModelToolCall 契约", "OpenAI-compatible tools", "Anthropic tool_use", "流式参数合并", "DeepSeek 真实冒烟"],
+      "completed": [
+        "新增 ModelToolCall、ModelStopReason 与兼容旧文本响应的流式/非流式契约",
+        "OpenAI/Anthropic 原生绑定工具并规范化 tool_calls/tool_use，严格合并流式参数",
+        "拒绝畸形 JSON、Schema 不匹配、缺失名称、重复 ID 和未知工具",
+        "内部点号工具名在供应商边界安全编码并无损映射回规范名",
+        "deepseek-openai 与 deepseek-anthropic 的 deepseek-v4-flash 均真实产生 file.read Tool Call"
+      ],
+      "in_progress": [],
+      "next_steps": [],
+      "blockers": []
+    },
+    {
+      "id": "B8-R2",
+      "title": "B8 纠偏 R2：LangGraph 自主工具循环",
       "status": "进行中",
       "percent": 0,
-      "scope": ["ModelToolCall 契约", "OpenAI-compatible tools", "Anthropic tool_use", "流式参数合并", "DeepSeek 真实冒烟"],
-      "completed": ["用户已确认进入真实 Agent 纠偏阶段，完整 R1～R7 计划和执行提示词已经提交"],
-      "in_progress": ["准备实现供应商无关 Tool Calling 协议并接入 DeepSeek 两种兼容接口"],
+      "scope": ["迭代图状态", "模型工具路由", "Tool Result 回注", "预算", "重复与无进展终止", "审批恢复"],
+      "completed": [],
+      "in_progress": ["扩展 AgentState 并把模型生成 Tool Call 接入现有 ToolRuntime"],
       "next_steps": [
-        "先补模型 Tool Call 契约和适配器失败测试",
-        "实现 OpenAI/Anthropic 非流式与流式 Tool Call 规范化",
-        "完成 DeepSeek 只读工具真实冒烟并创建 R1 提交",
-        "自动继续 R2 Agent 工具循环"
+        "补齐读、改、测、多工具、失败重试和预算终止测试",
+        "实现模型—工具—验证循环与同一 checkpoint 审批恢复",
+        "验收并创建 R2 提交后自动继续 R3"
       ],
       "blockers": []
     }

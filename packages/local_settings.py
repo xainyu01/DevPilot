@@ -69,6 +69,7 @@ class ModelEndpoint:
     base_url: str | None = None
     api_key: str | None = field(default=None, repr=False)
     enabled: bool = True
+    tool_capability: Literal["supported", "unsupported", "unknown"] = "unknown"
 
     def environment_names(self) -> dict[str, str]:
         prefix = re.sub(r"[^A-Z0-9]", "_", self.endpoint_id.upper())
@@ -219,6 +220,7 @@ class LocalSettingsStore:
                         "api_key": endpoint.api_key,
                         "models": list(endpoint.models),
                         "enabled": endpoint.enabled,
+                        "tool_capability": endpoint.tool_capability,
                     }
                     for endpoint in settings.model_endpoints
                 ],
@@ -318,6 +320,7 @@ def _parse_endpoint(raw: object) -> ModelEndpoint:
     api_key = raw.get("api_key")
     models = raw.get("models", [])
     enabled = raw.get("enabled", True)
+    tool_capability = raw.get("tool_capability", "unknown")
     if not all(isinstance(value, str) for value in (endpoint_id, name, provider)):
         raise LocalSettingsError("each model endpoint requires string id, name and provider")
     if base_url is not None and not isinstance(base_url, str):
@@ -328,6 +331,10 @@ def _parse_endpoint(raw: object) -> ModelEndpoint:
         raise LocalSettingsError("model endpoint models must be an array of strings")
     if not isinstance(enabled, bool):
         raise LocalSettingsError("model endpoint enabled must be a boolean")
+    if tool_capability not in {"supported", "unsupported", "unknown"}:
+        raise LocalSettingsError(
+            "model endpoint tool_capability must be supported, unsupported or unknown"
+        )
     return ModelEndpoint(
         endpoint_id.strip().lower(),
         name.strip(),
@@ -336,6 +343,7 @@ def _parse_endpoint(raw: object) -> ModelEndpoint:
         base_url.strip() if base_url and base_url.strip() else None,
         api_key.strip() if api_key and api_key.strip() else None,
         enabled,
+        tool_capability,
     )
 
 
@@ -399,6 +407,10 @@ def _validate_endpoint(endpoint: ModelEndpoint) -> None:
             raise LocalSettingsError("model endpoint URL must be an http(s) URL without userinfo")
     if endpoint.api_key is not None and not endpoint.api_key.strip():
         raise LocalSettingsError("saved API key cannot be blank")
+    if endpoint.tool_capability not in {"supported", "unsupported", "unknown"}:
+        raise LocalSettingsError(
+            "model endpoint tool_capability must be supported, unsupported or unknown"
+        )
     if any(not model for model in endpoint.models):
         raise LocalSettingsError("model names cannot be blank")
 

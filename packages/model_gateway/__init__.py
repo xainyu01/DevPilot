@@ -1,7 +1,12 @@
 """Provider-neutral model gateway and LangChain-backed adapters."""
 
 from .adapters import AnthropicAdapter, FakeModel, OllamaAdapter, OpenAIAdapter
-from .errors import AdapterNotImplementedError, ModelAdapterError, UnsupportedCapabilityError
+from .errors import (
+    AdapterNotImplementedError,
+    ModelAdapterError,
+    ToolCallProtocolError,
+    UnsupportedCapabilityError,
+)
 from .gateway import ChatModelAdapter, ModelGateway
 from .router import ModelRouter, ModelRoutingError, default_model_router
 from .selection import ModelChoiceError, ModelChoiceService, RuntimeModelSelection
@@ -18,6 +23,7 @@ __all__ = [
     "ModelChoiceError",
     "ModelChoiceService",
     "RuntimeModelSelection",
+    "ToolCallProtocolError",
     "default_model_router",
     "OpenAIAdapter",
     "OllamaAdapter",

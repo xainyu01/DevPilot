@@ -146,6 +146,27 @@ class TokenUsage(BaseModel):
         return self
 
 
+class ModelToolCall(BaseModel):
+    """One provider-neutral tool request emitted by a model."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    call_id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    arguments: dict[str, Any]
+
+
+class ModelStopReason(StrEnum):
+    """Normalized reason why a model turn stopped."""
+
+    TEXT_END = "text_end"
+    TOOL_CALLS = "tool_calls"
+    LENGTH_LIMIT = "length_limit"
+    PROVIDER_ERROR = "provider_error"
+    CANCELLED = "cancelled"
+    UNKNOWN = "unknown"
+
+
 class ChatRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -165,8 +186,10 @@ class ChatResponse(BaseModel):
     provider: ModelProvider | str
     model: str
     message: ChatMessage
+    tool_calls: list[ModelToolCall] = Field(default_factory=list)
     usage: TokenUsage = Field(default_factory=TokenUsage)
     finish_reason: str | None = None
+    stop_reason: ModelStopReason = ModelStopReason.UNKNOWN
     response_metadata: dict[str, Any] = Field(default_factory=dict)
 
     @property
@@ -179,10 +202,27 @@ class ModelStreamEvent(BaseModel):
 
     provider: ModelProvider | str
     model: str
+    kind: Literal[
+        "text_delta",
+        "tool_call_delta",
+        "tool_call_end",
+        "message_end",
+        "provider_error",
+    ] = "text_delta"
     text: str = ""
     index: int = Field(default=0, ge=0)
+    tool_call_index: int | None = Field(default=None, ge=0)
+    tool_call_id: str | None = None
+    tool_name: str | None = None
+    arguments_delta: str = ""
+    tool_call: ModelToolCall | None = None
+    tool_call_complete: bool = False
     done: bool = False
     usage: TokenUsage | None = None
+    finish_reason: str | None = None
+    stop_reason: ModelStopReason | None = None
+    error: dict[str, Any] | None = None
+    response_metadata: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -341,7 +381,9 @@ __all__ = [
     "ImageBlock",
     "ModelCapabilities",
     "ModelProvider",
+    "ModelStopReason",
     "ModelStreamEvent",
+    "ModelToolCall",
     "RunContext",
     "RunEvent",
     "RunEventType",

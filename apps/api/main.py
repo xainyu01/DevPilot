@@ -240,6 +240,7 @@ class ModelEndpointRequest(BaseModel):
     clear_api_key: bool = False
     models: list[str] = Field(default_factory=list, max_length=100)
     enabled: bool = True
+    tool_capability: Literal["supported", "unsupported", "unknown"] = "unknown"
 
 
 class AgentModelPolicyRequest(BaseModel):
@@ -1425,6 +1426,7 @@ def _public_runtime_settings(settings: LocalSettings) -> dict[str, object]:
                 "models": list(endpoint.models),
                 "effective_models": list(endpoint.resolve_models()),
                 "enabled": endpoint.enabled,
+                "tool_capability": endpoint.tool_capability,
                 "environment": endpoint.environment_names(),
             }
             for endpoint in settings.model_endpoints
@@ -1474,6 +1476,7 @@ def _settings_from_request(
                     dict.fromkeys(model.strip() for model in value.models if model.strip())
                 ),
                 enabled=value.enabled,
+                tool_capability=value.tool_capability,
             )
         )
     updated = LocalSettings(

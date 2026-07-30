@@ -22,6 +22,7 @@ type ModelEndpoint = {
   models: string[];
   effective_models: string[];
   enabled: boolean;
+  tool_capability?: "supported" | "unsupported" | "unknown";
 };
 type ModelPolicy = { mode: "manual" | "auto"; allowed_models: ModelTarget[] };
 type RuntimeSettings = {
@@ -395,6 +396,7 @@ function App() {
             clear_api_key: Boolean(endpoint.clear_api_key),
             models: endpoint.models,
             enabled: endpoint.enabled,
+            tool_capability: endpoint.tool_capability || "unknown",
           })),
           default_model: targetFromKey(defaultModelKey),
           agent_model_policy: {

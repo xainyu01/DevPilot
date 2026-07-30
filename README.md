@@ -46,6 +46,8 @@ pnpm --dir apps/web build
 - `api_key`：API 密钥；Web 不会回显已经保存的值。留空表示保留原值或读取环境变量，
   勾选“清除已保存 Key”才会删除本地值。
 - `models`：该连接允许使用的模型名称数组，同一连接可以填写多个。
+- `tool_capability`：原生 Tool Calling 探测状态；未探测为 `unknown`，确认后为
+  `supported` 或 `unsupported`。
 
 `default_model` 指定默认连接和模型。`agent_model_policy.mode` 为 `manual` 时使用默认模型，
 为 `auto` 时由默认模型先在 `allowed_models` 中建议目标模型，服务端校验建议没有越界后才执行；

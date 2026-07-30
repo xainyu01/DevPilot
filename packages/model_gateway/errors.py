@@ -9,6 +9,10 @@ class ModelAdapterError(RuntimeError):
     """Base error for adapter configuration and invocation failures."""
 
 
+class ToolCallProtocolError(ModelAdapterError):
+    """Raised when a provider returns an unsafe or malformed tool call."""
+
+
 class AdapterNotImplementedError(ModelAdapterError):
     """Raised when a declared provider is intentionally not implemented yet."""
 
