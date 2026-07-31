@@ -1,4 +1,4 @@
-name: Web application
+name: Windows delivery gate
 
 on:
   pull_request:
@@ -7,11 +7,10 @@ on:
 
 jobs:
   verify:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, ubuntu-22.04, macos-latest]
-    runs-on: ${{ matrix.os }}
+    name: verify (windows-latest)
+    # Windows-first：Linux/macOS 适配器尚未进入运行时验收范围。
+    # TODO（后续平台适配）：完成 Linux/macOS 运行时验收后，恢复跨平台矩阵。
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
